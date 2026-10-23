@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+release/
+tests/artifacts/
+*.log
+.env*
+!.env.example
+
+# Local project guidance
+/AGENTS.md
+/docs/PROJECT.md
+/docs/UI_RULES.md

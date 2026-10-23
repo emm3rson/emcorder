@@ -1,0 +1,37 @@
+{
+  "name": "emcorder",
+  "version": "0.0.1",
+  "description": "A local Windows camera recorder with a camera studio and MP4 file workflow.",
+  "main": "./out/main/index.js",
+  "author": "Emmerson Mena",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "npm run build && electron-builder --win --dir",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:spike": "npm run build && node tests/electron.smoke.mjs",
+    "test:studio": "npm run build && node tests/studio.smoke.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "6.0.0",
+    "playwright": "^1.64.1",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3",
+    "vite": "8.3.5"
+  }
+}

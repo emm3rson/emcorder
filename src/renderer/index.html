@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: recording:; worker-src 'self' blob:; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; base-uri 'self'" />
+    <title>EmCorder</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="./branding/app-icon-32.png" />
+    <style>
+      body { margin: 0; }
+      .startup-screen { position: fixed; inset: 0; display: grid; place-items: center; background: #202427; }
+      .startup-screen img { display: block; width: min(100%, 1200px); height: 100%; object-fit: contain; }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="startup-screen" role="status" aria-label="Starting EmCorder">
+        <img src="./branding/splash-screen.png" alt="" width="1200" height="800" fetchpriority="high" />
+      </div>
+    </div>
+    <script type="module" src="/app/main.tsx"></script>
+  </body>
+</html>

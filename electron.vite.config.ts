@@ -1,0 +1,20 @@
+import { defineConfig } from 'electron-vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig(({ command }) => ({
+  main: {},
+  preload: {},
+  renderer: {
+    plugins: [react(), {
+      name: 'development-react-csp',
+      transformIndexHtml: {
+        order: 'post',
+        handler: (html) => command === 'serve'
+          ? html.replace("script-src 'self' 'wasm-unsafe-eval'", "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'")
+          : html
+      }
+    }],
+    worker: { format: 'iife' },
+    server: { host: '127.0.0.1' }
+  }
+}))
