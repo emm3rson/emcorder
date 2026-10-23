@@ -2,9 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MutableRefObject, RefObject } from 'react'
 import { RECORDING_PROFILES, type RecordingQuality } from '../../../shared/recordingQuality'
 import type { BlurStrength } from '../../../shared/blurStrength'
-import { createPipeline, type BlurMetrics } from '../blur/pipeline'
-
-type Diagnostics = { frames: number; fps: number; segmentationMs: number }
+import { createPipeline } from '../blur/pipeline'
 
 export type UseCameraOptions = {
   inputVideo: RefObject<HTMLVideoElement | null>
@@ -34,10 +32,7 @@ export type CameraHook = {
   stream: MutableRefObject<MediaStream | null>
   level: number
   silent: boolean
-  status: string
   blurStatus: string
-  format: string
-  diagnostics: Diagnostics
   error: string
 }
 
@@ -85,10 +80,7 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
   const [connecting, setConnecting] = useState(false)
   const [level, setLevel] = useState(0)
   const [silent, setSilent] = useState(false)
-  const [status, setStatus] = useState('Camera and microphone are disconnected.')
   const [blurStatus, setBlurStatus] = useState('Connect your camera to begin.')
-  const [format, setFormat] = useState('720p · 30 FPS')
-  const [diagnostics, setDiagnostics] = useState<Diagnostics>({ frames: 0, fps: 0, segmentationMs: 0 })
   const [error, setError] = useState('')
 
   const clearMeter = useCallback(() => {
@@ -130,7 +122,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
     teardown(true)
     if (mounted.current) {
       setConnecting(false)
-      setStatus('Camera and microphone are disconnected.')
       setBlurStatus('Connect your camera to begin.')
     }
   }, [teardown])
@@ -143,7 +134,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
     disconnectingStream.current = affectedStream
     setConnected(false)
     setConnecting(false)
-    setStatus('Camera or microphone disconnected; finishing the current take…')
     setError(message)
 
     void (async () => {
@@ -155,7 +145,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
         if (mounted.current && generation.current === cleanupGeneration && stream.current === affectedStream) {
           teardown(true)
           setConnecting(false)
-          setStatus('Camera or microphone disconnected.')
           setError(message)
         }
         if (disconnectingStream.current === affectedStream) disconnectingStream.current = null
@@ -180,7 +169,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
           if (nextCamera !== current.cameraId || nextMic !== current.micId) {
             selectedIds.current = { cameraId: nextCamera, micId: nextMic }
             pendingFallbackNotice.current = true
-            setStatus('A saved camera or microphone is unavailable. Defaults will be used on connect.')
             callbacks.current.onSelectedIds(nextCamera, nextMic)
           }
         }
@@ -212,9 +200,7 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
     setConnecting(true)
     setError('')
     setQualityNotice('')
-    setStatus('Connecting camera and microphone…')
     setBlurStatus('Loading camera blur…')
-    setDiagnostics({ frames: 0, fps: 0, segmentationMs: 0 })
     let captured: MediaStream | null = null
     let ownedPipeline: Awaited<ReturnType<typeof createPipeline>> | null = null
     let context: AudioContext | null = null
@@ -303,7 +289,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
         }
         requestedCameraId = ''
         requestedMicId = ''
-        fellBackToDefault = true
         selectedIds.current = { cameraId: '', micId: '' }
         callbacks.current.onSelectedIds('', '')
       }
@@ -327,7 +312,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
       const actualMicId = audioTrack.getSettings().deviceId || requestedMicId
       selectedIds.current = { cameraId: actualCameraId, micId: actualMicId }
       callbacks.current.onSelectedIds(actualCameraId, actualMicId)
-      setFormat(`${settings.width} × ${settings.height} · ${Math.round(settings.frameRate || 30)} FPS`)
       const video = inputVideo.current
       const outputCanvas = canvas.current
       if (!video || !outputCanvas) throw new Error('The camera preview is unavailable. Close and reopen the studio, then try again.')
@@ -335,18 +319,9 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
       await video.play()
       if (!mounted.current || generation.current !== request) return false
 
-      let lastMetricsAt = performance.now()
-      let lastFrames = 0
       ownedPipeline = await createPipeline(video, outputCanvas, {
         mirrorVideo: currentMirrorVideo.current,
         onStatus: (message) => { if (generation.current === request && mounted.current) setBlurStatus(message) },
-        onMetrics: (metrics: BlurMetrics) => {
-          const now = performance.now()
-          if (now - lastMetricsAt < 1000 || generation.current !== request || !mounted.current) return
-          setDiagnostics({ frames: metrics.frames, fps: Math.round((metrics.frames - lastFrames) * 1000 / (now - lastMetricsAt)), segmentationMs: Math.round(metrics.segmentationMs) })
-          lastMetricsAt = now
-          lastFrames = metrics.frames
-        },
       }, captureQuality)
       if (!mounted.current || generation.current !== request) {
         ownedPipeline.dispose()
@@ -406,7 +381,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
       if (captureQuality !== requested.quality) callbacks.current.onQualityChange(captureQuality)
       setConnected(true)
       setConnecting(false)
-      setStatus(fellBackToDefault ? 'A saved camera or microphone was unavailable. Using the default device.' : 'Camera and microphone connected.')
       pendingFallbackNotice.current = false
       return true
     } catch (failure) {
@@ -421,7 +395,6 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
       const message = captureError(failure)
       if (mounted.current) {
         setConnecting(false)
-        setStatus('Connection failed.')
         setError(message)
       }
       return false
@@ -430,5 +403,5 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
     }
   }, [cameraId, micId, blur, blurStrength, quality, inputVideo, canvas, teardown, handleDeviceLoss])
 
-  return { devices, activeQuality, supports1080p, qualityNotice, connected, connecting, connect, disconnect, stream, level, silent, status, blurStatus, format, diagnostics, error }
+  return { devices, activeQuality, supports1080p, qualityNotice, connected, connecting, connect, disconnect, stream, level, silent, blurStatus, error }
 }

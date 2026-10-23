@@ -1,7 +1,7 @@
 import { _electron as electron } from 'playwright'
 import electronPath from 'electron'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { addOverlayMarker } from './overlay-marker.mjs'
@@ -219,6 +219,22 @@ try {
   await settingsDialog.getByRole('heading', { name: 'Keyboard shortcuts' }).waitFor()
   await page.keyboard.press('Control+Shift+R')
   assert.equal(await page.locator('.countdown').count(), 0, 'Settings must block studio shortcuts')
+  // A failed preferences write must remain visible until a later update succeeds.
+  // All files here belong to this isolated test profile.
+  const preferencesFile = join(userData, 'preferences.json')
+  const preferencesBackup = join(userData, 'preferences-backup.json')
+  await rename(preferencesFile, preferencesBackup)
+  await mkdir(preferencesFile)
+  try {
+    await mirrorSetting.uncheck()
+    await settingsDialog.getByRole('alert').filter({ hasText: /Preferences could not be saved/ }).waitFor()
+  } finally {
+    await rmdir(preferencesFile)
+    await rename(preferencesBackup, preferencesFile)
+  }
+  await mirrorSetting.check()
+  await settingsDialog.getByRole('alert').filter({ hasText: /Preferences could not be saved/ }).waitFor({ state: 'hidden' })
+  await page.waitForFunction(async () => (await window.emcorder.getPreferences()).mirrorVideo)
   const originalFolder = (await page.evaluate(() => window.emcorder.getPreferences())).outputFolder
   await app.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }) })
   await folderButton.click()

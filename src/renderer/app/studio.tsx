@@ -255,6 +255,7 @@ export function Studio() {
   }, [cancelCountdown, cancelInspection])
   useEffect(() => {
     if (!loaded) return
+    let current = true
     void window.emcorder.updatePreferences({
       cameraId,
       micId,
@@ -269,7 +270,12 @@ export function Studio() {
       scrollSpeed,
       overlayOpacity,
       overlayBounds,
-    }).catch((failure: unknown) => setPreferenceError(`Preferences could not be saved. ${message(failure)}`))
+    }).then(() => {
+      if (current) setPreferenceError('')
+    }).catch((failure: unknown) => {
+      if (current) setPreferenceError(`Preferences could not be saved. ${message(failure)}`)
+    })
+    return () => { current = false }
   }, [loaded, cameraId, micId, quality, blur, blurStrength, countdownSeconds, mirrorVideo, autoStartPrompter, script, fontSize, scrollSpeed, overlayOpacity, overlayBounds])
   useEffect(() => window.emcorder.onRequestStop(() => { void stop() }), [stop])
   useEffect(() => {
@@ -549,15 +555,10 @@ export function Studio() {
                     <rect x="5" y="11" width="14" height="9" rx="2.5" />
                     <path d="M8 11V8a4 4 0 0 1 8 0v3" strokeLinecap="round" />
                   </svg>
-                ) : deviceBusy ? (
+                ) : (
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
                     <circle cx="12" cy="12" r="9" />
                     <path d="M12 8v4.5M12 15.8h.01" strokeLinecap="round" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-                    <rect x="2.5" y="6" width="13.5" height="12" rx="3" />
-                    <path d="M16 10.2L21.5 7v10L16 13.8v-3.6Z" strokeLinejoin="round" />
                   </svg>
                 )}
               </span>}

@@ -3,16 +3,9 @@ import { BLUR_STRENGTHS, DEFAULT_BLUR_STRENGTH, type BlurStrength } from '../../
 import type { WorkerRequest, WorkerResponse } from './segmentation.protocol'
 import { createWebGLBlurCompositor } from './webglCompositor'
 
-export interface BlurMetrics {
-  frames: number
-  segmentationMs: number
-  blurEnabled: boolean
-}
-
 export interface BlurPipelineOptions {
   mirrorVideo?: boolean
   onStatus?: (message: string) => void
-  onMetrics?: (metrics: BlurMetrics) => void
 }
 
 const SEGMENT_WIDTH = 256
@@ -97,8 +90,6 @@ export async function createPipeline(
   let segmentTimer = 0
   let inflightTimeout = 0
   let initTimeout = 0
-  let frameCount = 0
-  let segmentationMs = 0
   let statusMessage = ''
   let segmentationStatus = 'Loading camera blur…'
 
@@ -142,7 +133,7 @@ export async function createPipeline(
     } else if (data.type === 'mask') {
       segmentationPending = false
       window.clearTimeout(inflightTimeout)
-      segmentationMs = data.segmentationMs
+      const segmentationMs = data.segmentationMs
       if (!disposed) {
         try {
           maskContext.clearRect(0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT)
@@ -221,9 +212,6 @@ export async function createPipeline(
         output.drawImage(foregroundCanvas, 0, 0)
       }
     }
-
-    frameCount++
-    options.onMetrics?.({ frames: frameCount, segmentationMs, blurEnabled })
   }, FRAME_INTERVAL_MS)
 
   function segmentFrame() {

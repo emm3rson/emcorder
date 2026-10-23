@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Clear preference-save warnings after a successful update, and ignore superseded update results so settings show the current persistence status.
+- Removed unused capture diagnostics and status state left behind by the diagnostics UI removal, avoiding unnecessary work and studio renders during capture.
+
 - Prepared the source repository for publication with MIT licensing, public setup and usage documentation, and local-only internal guides.
 - Measured the studio countdown test from the Record click so time spent checking Settings does not cause a false early-start failure.
 
