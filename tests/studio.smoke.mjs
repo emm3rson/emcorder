@@ -630,14 +630,29 @@ try {
   await page.waitForTimeout(200)
   assert.deepEqual(await captureTrackIds(), tracksBeforeSettings, 'Settings changes must not reconnect devices')
   await assertMirroredSides('.camera-preview', false)
+  // Measure in the renderer from the Record click. Settings interactions below
+  // consume countdown time and must not shift the timing assertion's origin.
+  await page.getByRole('button', { name: 'Record', exact: true }).evaluate((button) => {
+    window.__smokeCountdownDuration = new Promise((resolve) => {
+      button.addEventListener('click', () => {
+        const startedAt = performance.now()
+        const observer = new MutationObserver(() => {
+          if (!document.querySelector('.recording-badge')?.textContent.startsWith('Recording ')) return
+          observer.disconnect()
+          resolve(performance.now() - startedAt)
+        })
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+      }, { once: true, capture: true })
+    })
+  })
   await page.getByRole('button', { name: 'Record', exact: true }).click()
   assert.equal(await page.locator('.countdown strong').innerText(), '5', 'Record must use the configured countdown')
   await settingsButton.click()
   for (const control of [countdownSetting, mirrorSetting, autoStartSetting, folderButton]) assert(await control.isDisabled(), 'Capture settings must lock during countdown')
   await closeSettings()
-  await page.waitForTimeout(3_200)
-  assert.equal(await page.getByRole('button', { name: 'Stop', exact: true }).isVisible(), false, 'A five-second countdown must not start capture after three seconds')
   await page.getByRole('button', { name: 'Stop', exact: true }).waitFor({ timeout: 10_000 })
+  const countdownDuration = await page.evaluate(() => window.__smokeCountdownDuration)
+  assert(countdownDuration >= 4_800, `A five-second countdown must wait five seconds before capture (observed ${countdownDuration} ms)`)
   await page.waitForTimeout(1_200)
   assert.equal(await scrollOffset(), 0, 'Disabling automatic start must hold the prompter when recording begins')
   await page.getByRole('button', { name: 'Play scroll', exact: true }).click()

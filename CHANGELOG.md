@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Prepared the source repository for publication with MIT licensing, public setup and usage documentation, and local-only internal guides.
+- Measured the studio countdown test from the Record click so time spent checking Settings does not cause a false early-start failure.
 
 ## 0.0.1 - 2026-10-23
 
