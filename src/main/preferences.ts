@@ -5,6 +5,7 @@ import type { OverlayBounds, StudioPreferences, UpdatableStudioPreferences } fro
 import { MAX_SCRIPT_LENGTH } from '../shared/contracts'
 import { DEFAULT_RECORDING_QUALITY, isRecordingQuality } from '../shared/recordingQuality'
 import { DEFAULT_BLUR_STRENGTH, isBlurStrength } from '../shared/blurStrength'
+import { DEFAULT_IMAGE_ADJUSTMENTS, isImageAdjustment } from '../shared/imageAdjustments'
 import {
   DEFAULT_COUNTDOWN_SECONDS, DEFAULT_MIRROR_VIDEO, DEFAULT_AUTO_START_PROMPTER, isCountdownSeconds,
 } from '../shared/studioSettings'
@@ -61,6 +62,7 @@ export class PreferencesStore {
       micId: '',
       blur: true,
       blurStrength: DEFAULT_BLUR_STRENGTH,
+      ...DEFAULT_IMAGE_ADJUSTMENTS,
       quality: DEFAULT_RECORDING_QUALITY,
       countdownSeconds: DEFAULT_COUNTDOWN_SECONDS,
       mirrorVideo: DEFAULT_MIRROR_VIDEO,
@@ -91,6 +93,9 @@ export class PreferencesStore {
           micId: deviceId(value.micId),
           blur: typeof value.blur === 'boolean' ? value.blur : true,
           blurStrength: isBlurStrength(value.blurStrength) ? value.blurStrength : DEFAULT_BLUR_STRENGTH,
+          brightness: isImageAdjustment('brightness', value.brightness) ? value.brightness : DEFAULT_IMAGE_ADJUSTMENTS.brightness,
+          contrast: isImageAdjustment('contrast', value.contrast) ? value.contrast : DEFAULT_IMAGE_ADJUSTMENTS.contrast,
+          saturation: isImageAdjustment('saturation', value.saturation) ? value.saturation : DEFAULT_IMAGE_ADJUSTMENTS.saturation,
           quality: isRecordingQuality(value.quality) ? value.quality : DEFAULT_RECORDING_QUALITY,
           countdownSeconds: isCountdownSeconds(value.countdownSeconds) ? value.countdownSeconds : DEFAULT_COUNTDOWN_SECONDS,
           mirrorVideo: typeof value.mirrorVideo === 'boolean' ? value.mirrorVideo : DEFAULT_MIRROR_VIDEO,
@@ -111,9 +116,9 @@ export class PreferencesStore {
 
   async update(patch: Partial<UpdatableStudioPreferences>): Promise<void> {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Invalid preference update.')
-    const allowed = new Set(['cameraId', 'micId', 'blur', 'blurStrength', 'quality', 'countdownSeconds', 'mirrorVideo', 'autoStartPrompter', 'script', 'fontSize', 'scrollSpeed', 'overlayOpacity', 'overlayBounds'])
+    const allowed = new Set(['cameraId', 'micId', 'blur', 'blurStrength', 'quality', 'countdownSeconds', 'mirrorVideo', 'autoStartPrompter', 'script', 'fontSize', 'scrollSpeed', 'overlayOpacity', 'overlayBounds', 'brightness', 'contrast', 'saturation'])
     for (const key of Object.keys(patch)) {
-      if (!allowed.has(key)) throw new Error('Only device and blur, recording, or teleprompter preferences can be updated here.')
+      if (!allowed.has(key)) throw new Error('Only device, blur, image, recording, or teleprompter preferences can be updated here.')
     }
     if ('cameraId' in patch) {
       if (typeof patch.cameraId !== 'string' || patch.cameraId.length > 4096) throw new Error('Invalid camera preference.')
@@ -126,6 +131,15 @@ export class PreferencesStore {
     }
     if ('blurStrength' in patch) {
       if (!isBlurStrength(patch.blurStrength)) throw new Error('Invalid blur strength preference.')
+    }
+    if ('brightness' in patch && !isImageAdjustment('brightness', patch.brightness)) {
+      throw new Error('Invalid brightness preference.')
+    }
+    if ('contrast' in patch && !isImageAdjustment('contrast', patch.contrast)) {
+      throw new Error('Invalid contrast preference.')
+    }
+    if ('saturation' in patch && !isImageAdjustment('saturation', patch.saturation)) {
+      throw new Error('Invalid saturation preference.')
     }
     if ('quality' in patch) {
       if (!isRecordingQuality(patch.quality)) throw new Error('Invalid recording quality preference.')

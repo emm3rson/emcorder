@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test'
 import { createPipeline } from '../src/renderer/features/blur/pipeline'
 import type { WorkerRequest } from '../src/renderer/features/blur/segmentation.protocol'
 import { computePersonConfidence, refineConfidenceBuffer, smoothConfidenceBuffer } from '../src/renderer/features/blur/segmentation.worker'
+import { DEFAULT_IMAGE_ADJUSTMENTS } from '../src/shared/imageAdjustments'
 
 const originalGlobals = new Map<string, PropertyDescriptor | undefined>()
 
@@ -28,7 +29,7 @@ function installFakes(failure?: 'construct' | 'initialize') {
   const statuses: string[] = []
   const drawCalls: Array<unknown[]> = []
   const drawFilters: string[] = []
-  const drawStates: Array<{ target: unknown; source: unknown; transform: number[] }> = []
+  const drawStates: Array<{ target: unknown; source: unknown; transform: number[]; filter: string }> = []
   const createdCanvases: Array<{ width: number; height: number }> = []
   const canvas = () => {
     let transform = [1, 0, 0, 1, 0, 0]
@@ -38,7 +39,7 @@ function installFakes(failure?: 'construct' | 'initialize') {
         draws++
         drawCalls.push(args)
         drawFilters.push(context.filter)
-        drawStates.push({ target: surface, source: args[0], transform: [...transform] })
+        drawStates.push({ target: surface, source: args[0], transform: [...transform], filter: context.filter })
       },
       clearRect: () => {},
       filter: 'none',
@@ -250,9 +251,67 @@ for (const renderer of ['canvas2d', 'webgl'] as const) {
       checkOrientation(true, 1)
       pipeline.setMirrorVideo(false)
       checkOrientation(false, 1)
-      assert.equal(fakes.createdCanvases.length, 4, 'orientation changes should reuse all processing canvases')
+      assert.equal(fakes.createdCanvases.length, 5, 'orientation changes should reuse all processing canvases')
       assert.equal(fakes.intervals.size, 1, 'the original render loop should survive segmentation failure')
       pipeline.dispose()
+    })
+  }
+}
+
+for (const renderer of ['canvas2d', 'webgl'] as const) {
+  for (const quality of ['720p', '1080p'] as const) {
+    test(`${quality} ${renderer} applies image adjustments once after compositing and retains them through fallbacks`, async () => {
+      const fakes = installFakes()
+      const webgl = renderer === 'webgl' ? installWebGLFake() : null
+      const pipeline = await createPipeline(fakes.video, fakes.canvas, {
+        imageAdjustments: { brightness: 110, contrast: 90, saturation: 120 },
+      }, quality)
+      const frame = [...fakes.intervals.values()][0].callback
+      const checkFrame = (filter: string, compositeLayers: number, mirrored = true) => {
+        fakes.drawStates.length = 0
+        frame()
+        const outputDraws = fakes.drawStates.filter(({ target }) => target === fakes.canvas)
+        assert.equal(outputDraws.length, 1, 'the completed adjusted frame reaches the recorder canvas once')
+        assert.equal(outputDraws[0].filter, filter)
+        assert.deepEqual(outputDraws[0].transform, mirrored ? [-1, 0, 0, 1, fakes.canvas.width, 0] : [1, 0, 0, 1, 0, 0])
+        assert.equal(fakes.canvas.getContext('2d')!.filter, 'none', 'filters must not leak into the next frame')
+        const processingDraws = fakes.drawStates.filter(({ target }) => target !== fakes.canvas)
+        assert.ok(processingDraws.every(({ filter, transform }) =>
+          !filter.includes('brightness') && transform.every((value, index) => value === [1, 0, 0, 1, 0, 0][index])),
+        'segmentation, source, and masks must keep their original colors and coordinates')
+        if (filter !== 'none') {
+          assert.equal(fakes.drawStates.filter(({ target }) => target === outputDraws[0].source).length, compositeLayers)
+        }
+      }
+      const initialFilter = 'brightness(110%) contrast(90%) saturate(120%)'
+      checkFrame(initialFilter, 1) // Model still preparing.
+      fakes.worker.ready()
+      fakes.mask(await fakes.sample())
+      checkFrame(initialFilter, webgl ? 1 : 2)
+      const worker = fakes.worker
+      pipeline.setImageAdjustments({ brightness: 150, contrast: 50, saturation: 50 })
+      const updatedFilter = 'brightness(150%) contrast(50%) saturate(50%)'
+      checkFrame(updatedFilter, webgl ? 1 : 2)
+      if (webgl) {
+        webgl.loseContext()
+        checkFrame(updatedFilter, 2)
+      }
+      fakes.advance(801)
+      checkFrame(updatedFilter, 1) // An expired mask must not drop image settings.
+      pipeline.setBlur(false)
+      checkFrame(updatedFilter, 1)
+      pipeline.setImageAdjustments(DEFAULT_IMAGE_ADJUSTMENTS)
+      checkFrame('none', 0)
+      pipeline.setImageAdjustments({ brightness: 110, contrast: 90, saturation: 120 })
+      pipeline.setBlur(true)
+      fakes.worker.dispatchEvent(new Event('messageerror'))
+      pipeline.setMirrorVideo(false)
+      checkFrame(initialFilter, 1, false)
+      assert.equal(fakes.worker, worker, 'adjustments must not replace capture resources')
+      assert.equal(fakes.intervals.size, 1, 'adjustments must keep the original render loop')
+      assert.equal(fakes.createdCanvases.length, 5, 'adjustments and Reset must reuse canvases')
+      pipeline.dispose()
+      assert.ok(fakes.createdCanvases.every(({ width, height }) => width === 1 && height === 1))
     })
   }
 }
@@ -333,7 +392,7 @@ for (const [quality, width, height] of [['720p', 1280, 720], ['1080p', 1920, 108
     const pipeline = await createPipeline(fakes.video, fakes.canvas, {}, quality);
     assert.deepEqual([fakes.canvas.width, fakes.canvas.height], [width, height]);
     assert.deepEqual(fakes.createdCanvases.map(({ width, height }) => [width, height]), [
-      [width, height], [width, height], [256, 256], [256, 256],
+      [width, height], [width, height], [256, 256], [256, 256], [width, height],
     ]);
     assert.ok(Array.from(fakes.intervals.values()).some(({ delay }) => delay === 1000 / 30));
     pipeline.dispose();
@@ -366,7 +425,7 @@ for (const [quality, baseRadius, maskFeather] of [['720p', 18, 1.5], ['1080p', 2
     pipeline.setBlur(true)
     fakes.mask(await fakes.sample())
     checkRadius(baseRadius * 1.5)
-    assert.equal(fakes.createdCanvases.length, 4, 'changing strength should reuse the processing canvases')
+    assert.equal(fakes.createdCanvases.length, 5, 'changing strength should reuse the processing canvases')
     assert.equal(fakes.intervals.size, 1, 'only output rendering should use a repeating timer')
     pipeline.dispose()
   })

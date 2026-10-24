@@ -1,10 +1,12 @@
 import { DEFAULT_RECORDING_QUALITY, RECORDING_PROFILES, type RecordingQuality } from '../../../shared/recordingQuality'
 import { BLUR_STRENGTHS, DEFAULT_BLUR_STRENGTH, type BlurStrength } from '../../../shared/blurStrength'
+import { DEFAULT_IMAGE_ADJUSTMENTS, imageAdjustmentFilter, type ImageAdjustments } from '../../../shared/imageAdjustments'
 import type { WorkerRequest, WorkerResponse } from './segmentation.protocol'
 import { createWebGLBlurCompositor, SEGMENTATION_MASK_SIZE } from './webglCompositor'
 
 export interface BlurPipelineOptions {
   mirrorVideo?: boolean
+  imageAdjustments?: ImageAdjustments
   onStatus?: (message: string) => void
 }
 
@@ -36,13 +38,13 @@ function coverDraw(
   context.drawImage(source, sx, sy, cropWidth, cropHeight, 0, 0, width, height)
 }
 
-/** Creates a quality-sized 30 FPS camera output with a segmented blur. */
+/** Creates a quality-sized 30 FPS camera output with blur and image adjustments. */
 export async function createPipeline(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
   options: BlurPipelineOptions = {},
   quality: RecordingQuality = DEFAULT_RECORDING_QUALITY,
-): Promise<{ setBlur(enabled: boolean): void; setBlurStrength(strength: BlurStrength): void; setMirrorVideo(enabled: boolean): void; dispose(): void }> {
+): Promise<{ setBlur(enabled: boolean): void; setBlurStrength(strength: BlurStrength): void; setMirrorVideo(enabled: boolean): void; setImageAdjustments(adjustments: ImageAdjustments): void; dispose(): void }> {
   const { width: outputWidth, height: outputHeight } = RECORDING_PROFILES[quality]
   const effectScale = outputHeight / 720
   const output = canvas.getContext('2d', { alpha: false })
@@ -71,7 +73,13 @@ export async function createPipeline(
   maskCanvas.width = SEGMENT_WIDTH
   maskCanvas.height = SEGMENT_HEIGHT
   const maskContext = maskCanvas.getContext('2d')
-  if (!sourceContext || !foregroundContext || !segmentationContext || !maskContext) {
+  // Composite first, then adjust the completed image exactly once. Keep the
+  // segmentation input untouched and bypass this surface for neutral settings.
+  const adjustmentCanvas = document.createElement('canvas')
+  adjustmentCanvas.width = outputWidth
+  adjustmentCanvas.height = outputHeight
+  const adjustmentContext = adjustmentCanvas.getContext('2d', { alpha: false })
+  if (!sourceContext || !foregroundContext || !segmentationContext || !maskContext || !adjustmentContext) {
     throw new Error('Camera processing canvas is unavailable.')
   }
   const segmentationCtx = segmentationContext
@@ -81,6 +89,7 @@ export async function createPipeline(
   let disposed = false
   let blurEnabled = true
   let blurStrength = DEFAULT_BLUR_STRENGTH
+  let imageFilter = imageAdjustmentFilter(options.imageAdjustments ?? DEFAULT_IMAGE_ADJUSTMENTS)
   let segmentationPending = false
   let workerReady = false
   let maskReady = false
@@ -211,17 +220,18 @@ export async function createPipeline(
   const frameTimer = window.setInterval(() => {
     if (disposed || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return
     coverDraw(sourceContext, video, video.videoWidth, video.videoHeight, outputWidth, outputHeight)
+    const composite = imageFilter === 'none' ? output : adjustmentContext
     const maskFresh = maskReady && performance.now() - lastMaskAt <= MASK_STALE_MS
     if (blurEnabled && maskReady && !maskFresh) {
       maskReady = false
       reportStatus('Camera blur is delayed. Showing the camera without blur until a fresh mask arrives.')
     }
     if (blurEnabled && maskFresh && webglCompositor?.render(sourceCanvas, maskCanvas, blurStrength, maskRevision)) {
-      output.filter = 'none'
-      output.drawImage(webglCompositor.canvas, 0, 0)
+      composite.filter = 'none'
+      composite.drawImage(webglCompositor.canvas, 0, 0)
     } else {
-      output.filter = blurEnabled && maskFresh ? `blur(${18 * effectScale * BLUR_STRENGTHS[blurStrength].scale}px)` : 'none'
-      output.drawImage(sourceCanvas, 0, 0)
+      composite.filter = blurEnabled && maskFresh ? `blur(${18 * effectScale * BLUR_STRENGTHS[blurStrength].scale}px)` : 'none'
+      composite.drawImage(sourceCanvas, 0, 0)
 
       if (blurEnabled && maskFresh) {
         foregroundContext.clearRect(0, 0, outputWidth, outputHeight)
@@ -231,9 +241,14 @@ export async function createPipeline(
         foregroundContext.drawImage(maskCanvas, 0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT, 0, 0, outputWidth, outputHeight)
         foregroundContext.filter = 'none'
         foregroundContext.globalCompositeOperation = 'source-over'
-        output.filter = 'none'
-        output.drawImage(foregroundCanvas, 0, 0)
+        composite.filter = 'none'
+        composite.drawImage(foregroundCanvas, 0, 0)
       }
+    }
+    if (imageFilter !== 'none') {
+      output.filter = imageFilter
+      output.drawImage(adjustmentCanvas, 0, 0)
+      output.filter = 'none'
     }
   }, FRAME_INTERVAL_MS)
 
@@ -304,6 +319,9 @@ export async function createPipeline(
   }
 
   return {
+    setImageAdjustments(adjustments) {
+      if (!disposed) imageFilter = imageAdjustmentFilter(adjustments)
+    },
     setMirrorVideo(enabled) {
       if (!disposed) applyMirrorVideo(enabled)
     },
@@ -342,6 +360,7 @@ export async function createPipeline(
       foregroundCanvas.width = foregroundCanvas.height = 1
       segmentationCanvas.width = segmentationCanvas.height = 1
       maskCanvas.width = maskCanvas.height = 1
+      adjustmentCanvas.width = adjustmentCanvas.height = 1
     },
   }
 }

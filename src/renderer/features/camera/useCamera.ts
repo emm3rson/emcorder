@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MutableRefObject, RefObject } from 'react'
 import { RECORDING_PROFILES, type RecordingQuality } from '../../../shared/recordingQuality'
 import type { BlurStrength } from '../../../shared/blurStrength'
+import { DEFAULT_IMAGE_ADJUSTMENTS, type ImageAdjustments } from '../../../shared/imageAdjustments'
 import { createPipeline } from '../blur/pipeline'
 
 export type UseCameraOptions = {
@@ -12,6 +13,7 @@ export type UseCameraOptions = {
   blur: boolean
   mirrorVideo?: boolean
   blurStrength: BlurStrength
+  imageAdjustments?: ImageAdjustments
   quality: RecordingQuality
   onQualityChange: (quality: RecordingQuality) => void
   onSelectedIds: (cameraId: string, micId: string) => void
@@ -51,9 +53,11 @@ function captureError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStrength, mirrorVideo = true, quality, onQualityChange, onSelectedIds, onDisconnect }: UseCameraOptions): CameraHook {
+export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStrength, mirrorVideo = true, imageAdjustments = DEFAULT_IMAGE_ADJUSTMENTS, quality, onQualityChange, onSelectedIds, onDisconnect }: UseCameraOptions): CameraHook {
   const currentMirrorVideo = useRef(mirrorVideo)
   currentMirrorVideo.current = mirrorVideo
+  const currentImageAdjustments = useRef(imageAdjustments)
+  currentImageAdjustments.current = imageAdjustments
   const previousCapture = useRef<{ cameraId: string; quality: RecordingQuality } | null>(null)
   const rejected1080 = useRef(new Set<string>())
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
@@ -192,6 +196,7 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
   useEffect(() => { pipeline.current?.setBlur(blur) }, [blur])
   useEffect(() => { pipeline.current?.setBlurStrength(blurStrength) }, [blurStrength])
   useEffect(() => { pipeline.current?.setMirrorVideo(mirrorVideo) }, [mirrorVideo])
+  useEffect(() => { pipeline.current?.setImageAdjustments(imageAdjustments) }, [imageAdjustments])
 
   const connect = useCallback(async (selection: Partial<CameraSelection> = {}): Promise<boolean> => {
     const requested = { cameraId, micId, quality, ...selection }
@@ -321,6 +326,7 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
 
       ownedPipeline = await createPipeline(video, outputCanvas, {
         mirrorVideo: currentMirrorVideo.current,
+        imageAdjustments: currentImageAdjustments.current,
         onStatus: (message) => { if (generation.current === request && mounted.current) setBlurStatus(message) },
       }, captureQuality)
       if (!mounted.current || generation.current !== request) {
@@ -332,6 +338,7 @@ export function useCamera({ inputVideo, canvas, cameraId, micId, blur, blurStren
       ownedPipeline.setBlur(blur)
       ownedPipeline.setBlurStrength(blurStrength)
       ownedPipeline.setMirrorVideo(currentMirrorVideo.current)
+      ownedPipeline.setImageAdjustments(currentImageAdjustments.current)
 
       context = new AudioContext()
       audio.current = context

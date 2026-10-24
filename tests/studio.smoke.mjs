@@ -226,6 +226,85 @@ try {
     })
   }
 
+  // Feed stable camera pixels through the real compositor, filters, and MP4
+  // encoder so this checks recorded output rather than preview-only CSS.
+  const imageCard = page.locator('.image-card')
+  assert.equal(await imageCard.evaluate((card) => card.open), false, 'Image controls should start collapsed')
+  await imageCard.locator('summary').click()
+  const imageSliders = ['Brightness', 'Contrast', 'Saturation'].map((name) => page.getByRole('slider', { name, exact: true }))
+  const resetImage = page.getByRole('button', { name: 'Reset image adjustments', exact: true })
+  for (const slider of imageSliders) assert.equal(await slider.inputValue(), '100')
+  assert(await resetImage.isDisabled(), 'Neutral image settings need no Reset')
+  const imageTrackIds = await page.locator('.source-video').evaluate((video) => video.srcObject.getTracks().map((track) => track.id))
+  await page.evaluate(() => {
+    window.__smokeImageDrawImage = CanvasRenderingContext2D.prototype.drawImage
+    CanvasRenderingContext2D.prototype.drawImage = function (source, ...args) {
+      window.__smokeImageDrawImage.call(this, source, ...args)
+      if (source instanceof HTMLVideoElement && source.classList.contains('source-video')) {
+        this.save()
+        this.fillStyle = 'rgb(80, 120, 160)'
+        this.fillRect(0, 0, this.canvas.width, this.canvas.height)
+        this.restore()
+      }
+    }
+  })
+  const waitForImagePixel = (expected) => page.waitForFunction((expected) => {
+    const canvas = document.querySelector('.camera-preview')
+    const pixel = canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data
+    return expected.every((value, channel) => Math.abs(value - pixel[channel]) <= 3)
+  }, expected)
+  await waitForImagePixel([80, 120, 160])
+  await imageSliders[0].press('End')
+  assert.equal(await imageSliders[0].inputValue(), '150', 'Brightness should support native range keys')
+  await waitForImagePixel([120, 180, 240])
+  await imageSliders[1].press('Home')
+  await waitForImagePixel([124, 154, 184])
+  await imageSliders[2].press('Home')
+  const adjustedPixel = [137, 152, 167]
+  await waitForImagePixel(adjustedPixel)
+  assert.deepEqual(await page.locator('.source-video').evaluate((video) => video.srcObject.getTracks().map((track) => track.id)), imageTrackIds,
+    'Image adjustments must not reconnect the camera or microphone')
+  await page.getByLabel('Background blur', { exact: true }).uncheck()
+  await waitForImagePixel(adjustedPixel)
+  await page.getByLabel('Background blur', { exact: true }).check()
+  await waitForImagePixel(adjustedPixel)
+  await page.getByRole('button', { name: 'Record', exact: true }).click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).waitFor()
+  for (const control of [...imageSliders, resetImage]) assert(await control.isDisabled(), 'Image controls must lock during countdown')
+  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor()
+  for (const control of [...imageSliders, resetImage]) assert(await control.isDisabled(), 'Image controls must lock during recording')
+  await page.waitForTimeout(1_200)
+  await page.getByRole('button', { name: 'Stop', exact: true }).click()
+  await waitForReview()
+  const recordedPixel = await page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+    const canvas = new OffscreenCanvas(100, 100)
+    const context = canvas.getContext('2d')
+    context.drawImage(bitmap, 0, 0, 100, 100)
+    bitmap.close()
+    return [...context.getImageData(50, 50, 1, 1).data]
+  }, (await page.locator('#review-video').screenshot()).toString('base64'))
+  assert(adjustedPixel.every((value, channel) => Math.abs(value - recordedPixel[channel]) <= 12),
+    `Encoded MP4 must retain image adjustments (observed ${recordedPixel})`)
+  await retakeUnsaved()
+  for (const slider of imageSliders) assert(await slider.isEnabled(), 'Retake must unlock image controls')
+  await resetImage.click()
+  for (const slider of imageSliders) assert.equal(await slider.inputValue(), '100')
+  await waitForImagePixel([80, 120, 160])
+  assert(await page.getByRole('radio', { name: 'Standard', exact: true }).isChecked(), 'Reset must preserve blur strength')
+  assert.deepEqual(await page.locator('.source-video').evaluate((video) => video.srcObject.getTracks().map((track) => track.id)), imageTrackIds,
+    'Reset must reuse the active capture')
+  await page.waitForFunction(async () => {
+    const preferences = await window.emcorder.getPreferences()
+    return preferences.brightness === 100 && preferences.contrast === 100 && preferences.saturation === 100
+  })
+  await page.evaluate(() => {
+    CanvasRenderingContext2D.prototype.drawImage = window.__smokeImageDrawImage
+    delete window.__smokeImageDrawImage
+  })
+  await imageCard.locator('summary').click()
+
   let settingsButton, settingsDialog, countdownSetting, mirrorSetting, autoStartSetting, folderButton
   function bindSettings() {
     settingsButton = page.getByRole('button', { name: 'Settings', exact: true })
@@ -297,6 +376,7 @@ try {
   await restartDevices.click()
   await page.waitForFunction(() => !!window.__smokeReleaseRestart)
   assert(await restartDevices.isDisabled(), 'Restart must lock while reconnecting')
+  for (const slider of await imageCard.locator('input[type="range"]').all()) assert(await slider.isDisabled(), 'Image adjustments must lock while reconnecting')
   assert(await page.getByRole('button', { name: 'Record', exact: true }).isDisabled(), 'Recording must lock while reconnecting')
   assert(await page.evaluate(() => window.__smokePreviousTracks.every((track) => track.readyState === 'ended')), 'Restart must release the old camera and microphone')
   await page.evaluate(() => window.__smokeReleaseRestart())
@@ -875,6 +955,12 @@ try {
   await page.waitForFunction(async () => !(await window.emcorder.getPreferences()).blur, null, { timeout: 5_000, polling: 100 })
   const selectedCamera = await camera.inputValue()
   const selectedMicrophone = await microphone.inputValue()
+  await imageCard.locator('summary').click()
+  for (const slider of imageSliders) await slider.press('End')
+  await page.waitForFunction(async () => {
+    const preferences = await window.emcorder.getPreferences()
+    return preferences.brightness === 150 && preferences.contrast === 150 && preferences.saturation === 150
+  })
   const preferences = await page.evaluate(() => window.emcorder.getPreferences())
   assert.equal(preferences.countdownSeconds, 5)
   await settingsButton.click()
@@ -906,6 +992,13 @@ try {
   assert.equal(await page.getByLabel('Microphone', { exact: true }).inputValue(), selectedMicrophone, 'Microphone preference should restore')
   const restored = await page.evaluate(() => window.emcorder.getPreferences())
   assert.equal(restored.outputFolder, typedOutputDir, 'Output directory preference should restore')
+  assert.equal(await page.locator('.image-card').evaluate((card) => card.open), false, 'Restored image controls should start collapsed')
+  await page.locator('.image-card summary').click()
+  for (const [name, value] of [['Brightness', '150'], ['Contrast', '150'], ['Saturation', '150']]) {
+    assert.equal(await page.getByRole('slider', { name, exact: true }).inputValue(), value, 'Image adjustments should restore across launches')
+  }
+  await page.getByRole('button', { name: 'Reset image adjustments', exact: true }).click()
+  await page.locator('.image-card summary').click()
   await settingsButton.click()
   assert.equal(await countdownSetting.inputValue(), '5', 'Countdown preference should restore')
   assert.equal(await mirrorSetting.isChecked(), false, 'Mirror preference should restore')

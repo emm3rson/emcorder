@@ -2,7 +2,7 @@
 
 EmCorder is a Windows 11 webcam recorder. Set up a camera and script, record, and save an MP4 from one window.
 
-Features: 720p and 1080p recording, background blur, a draggable teleprompter, and local storage for scripts and settings. The teleprompter sits above the preview and is never recorded. Video, audio, and scripts stay on your machine. There are no accounts, analytics, or cloud services.
+Features: 720p and 1080p recording, background blur, brightness, contrast, and saturation adjustments, a draggable teleprompter, and local storage for scripts and settings. The teleprompter sits above the preview and is never recorded. Video, audio, and scripts stay on your machine. There are no accounts, analytics, or cloud services.
 
 ## Run and build
 
@@ -28,7 +28,7 @@ To run the packaged app, open `EmCorder.exe` in `release/win-unpacked` and keep 
 ## Using the studio
 
 1. Click **Connect camera**, then choose a camera, microphone, and quality. Quality defaults to 720p and is remembered. Changing any of them reconnects the preview. If the camera rejects 1080p, the app retries 720p on the same camera.
-2. Toggle background blur and check the microphone meter. During recording, a warning appears after sustained silence.
+2. Toggle background blur, expand **Image** to adjust brightness, contrast, and saturation from 50–150%, and check the microphone meter. Image adjustments apply to the preview and saved video, work with blur on or off, and are remembered. **Reset** returns only image adjustments to neutral. During recording, a warning appears after sustained silence.
 3. Write or paste a script, show the teleprompter, and place it near the webcam. Adjust font size, speed, and opacity.
 4. Click **Record** or press `Ctrl+Shift+R`. A cancellable countdown runs first, and the teleprompter can start scrolling when recording begins. **Retake** discards the take and restarts the countdown.
 5. Stop to review the MP4, then **Save** (choose a filename and folder) or **Retake**.

@@ -16,6 +16,7 @@ import {
   DEFAULT_COUNTDOWN_SECONDS, DEFAULT_MIRROR_VIDEO, DEFAULT_AUTO_START_PROMPTER,
   MIN_COUNTDOWN_SECONDS, MAX_COUNTDOWN_SECONDS,
 } from '../src/shared/studioSettings'
+import { DEFAULT_IMAGE_ADJUSTMENTS } from '../src/shared/imageAdjustments'
 
 const roots: string[] = []
 async function setup() {
@@ -34,6 +35,7 @@ function defaultPrefs(outputFolder: string, overrides: Partial<StudioPreferences
     micId: '',
     blur: true,
     blurStrength: 'standard',
+    ...DEFAULT_IMAGE_ADJUSTMENTS,
     quality: '720p',
     countdownSeconds: DEFAULT_COUNTDOWN_SECONDS,
     mirrorVideo: DEFAULT_MIRROR_VIDEO,
@@ -150,6 +152,47 @@ test('defaults recording quality to 720p, persists 1080p, and rejects unknown qu
   }
 })
 
+test('persists and reloads image adjustments, defaults legacy or malformed values independently, and rejects invalid patches atomically', async () => {
+  const { userData, videos, store } = await setup()
+  assert.deepEqual(await store.load(), defaultPrefs(videos))
+
+  await store.update({ brightness: 115, contrast: 85, saturation: 130 })
+  const expected = defaultPrefs(videos, { brightness: 115, contrast: 85, saturation: 130 })
+  assert.deepEqual(await new PreferencesStore(userData, videos).load(), expected)
+
+  for (const boundary of [50, 150]) {
+    await store.update({ brightness: boundary, contrast: boundary, saturation: boundary })
+    assert.deepEqual(await new PreferencesStore(userData, videos).load(),
+      defaultPrefs(videos, { brightness: boundary, contrast: boundary, saturation: boundary }))
+  }
+
+  for (const [saved, expectedAdjustments] of [
+    [{}, { brightness: 100, contrast: 100, saturation: 100 }],
+    [{ brightness: 110, contrast: '90', saturation: 140 }, { brightness: 110, contrast: 100, saturation: 140 }],
+    [{ brightness: 49, contrast: 151, saturation: 151 }, { brightness: 100, contrast: 100, saturation: 100 }],
+    [{ brightness: 50, contrast: 150, saturation: 100 }, { brightness: 50, contrast: 150, saturation: 100 }],
+    [{ brightness: 100.5, contrast: null, saturation: Number.NaN }, { brightness: 100, contrast: 100, saturation: 100 }]
+  ]) {
+    await writeFile(join(userData, 'preferences.json'), JSON.stringify(saved))
+    const loaded = await new PreferencesStore(userData, videos).load()
+    assert.deepEqual(
+      { brightness: loaded.brightness, contrast: loaded.contrast, saturation: loaded.saturation },
+      expectedAdjustments
+    )
+  }
+
+  await store.update({ brightness: 120, contrast: 90, saturation: 110 })
+  const beforeInvalidPatch = store.get()
+  for (const [key, invalid] of [
+    ['brightness', 49], ['brightness', 151], ['brightness', 100.5], ['contrast', 49], ['contrast', 151],
+    ['contrast', Number.NaN], ['saturation', 49], ['saturation', 151], ['saturation', Infinity]
+  ] as const) {
+    await assert.rejects(store.update({ [key]: invalid, blur: false } as never), new RegExp(`Invalid ${key} preference`))
+    assert.deepEqual(store.get(), beforeInvalidPatch)
+  }
+  assert.deepEqual(await new PreferencesStore(userData, videos).load(), beforeInvalidPatch)
+})
+
 test('restores blur presets, preserves the choice while off, and safely handles old or invalid settings', async () => {
   const { userData, videos, store } = await setup()
   assert.equal((await store.load()).blurStrength, 'standard')
@@ -175,7 +218,7 @@ test('malformed settings and invalid patches safely use defaults or reject', asy
   await writeFile(join(userData, 'preferences.json'), '{broken')
   assert.deepEqual(await store.load(), defaultPrefs(videos))
   await assert.rejects(store.update({ blur: 'yes' as unknown as boolean }), /Invalid blur preference/)
-  await assert.rejects(store.update({ outputFolder: videos } as never), /Only device and blur/)
+  await assert.rejects(store.update({ outputFolder: videos } as never), /Only device, blur, image/)
   assert.deepEqual(store.get(), defaultPrefs(videos))
 })
 
@@ -267,6 +310,7 @@ test('clamps overlayBounds on update and load when out of bounds or below minimu
     micId: 'mic-1',
     blur: false,
     blurStrength: 'standard',
+    ...DEFAULT_IMAGE_ADJUSTMENTS,
     quality: '720p',
     countdownSeconds: DEFAULT_COUNTDOWN_SECONDS,
     mirrorVideo: DEFAULT_MIRROR_VIDEO,

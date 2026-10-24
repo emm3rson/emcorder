@@ -1,5 +1,6 @@
 import type { RecordingQuality } from './recordingQuality'
 import type { BlurStrength } from './blurStrength'
+import type { ImageAdjustments } from './imageAdjustments'
 
 export const MAX_SCRIPT_LENGTH = 100_000
 
@@ -10,7 +11,7 @@ export interface OverlayBounds {
   width: number
   height: number
 }
-export interface StudioPreferences {
+export interface StudioPreferences extends ImageAdjustments {
   cameraId: string
   micId: string
   blur: boolean
@@ -28,7 +29,7 @@ export interface StudioPreferences {
 }
 export type UpdatableStudioPreferences = Pick<
   StudioPreferences,
-  'cameraId' | 'micId' | 'blur' | 'blurStrength' | 'quality' | 'countdownSeconds' | 'mirrorVideo' | 'autoStartPrompter' | 'script' | 'fontSize' | 'scrollSpeed' | 'overlayOpacity' | 'overlayBounds'
+  'cameraId' | 'micId' | 'blur' | 'blurStrength' | 'quality' | 'countdownSeconds' | 'mirrorVideo' | 'autoStartPrompter' | 'script' | 'fontSize' | 'scrollSpeed' | 'overlayOpacity' | 'overlayBounds' | 'brightness' | 'contrast' | 'saturation'
 >
 export interface EmcorderBridge {
   beginRecording(mimeType: string): Promise<void>

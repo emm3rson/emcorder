@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_RECORDING_QUALITY, type RecordingQuality } from '../../shared/recordingQuality'
 import { BLUR_STRENGTHS, DEFAULT_BLUR_STRENGTH, type BlurStrength } from '../../shared/blurStrength'
 import { DEFAULT_COUNTDOWN_SECONDS, DEFAULT_MIRROR_VIDEO, DEFAULT_AUTO_START_PROMPTER } from '../../shared/studioSettings'
+import { DEFAULT_IMAGE_ADJUSTMENTS, type ImageAdjustments } from '../../shared/imageAdjustments'
 import { useCamera, type CameraSelection } from '../features/camera/useCamera'
 import { chooseMp4Type, Mp4Recorder, type RecordedTake } from '../features/recordings/recorder'
 import { inspectRecording, type RecordingInspection } from '../features/recordings/mediaChecks'
@@ -19,6 +20,7 @@ import {
 } from '../features/teleprompter/teleprompterModel'
 import { TeleprompterOverlay } from '../features/teleprompter/TeleprompterOverlay'
 import { TeleprompterPanel } from '../features/teleprompter/TeleprompterPanel'
+import { ImagePanel } from '../features/image/ImagePanel'
 
 type Stage = 'idle' | 'ready' | 'countdown' | 'starting' | 'recording' | 'finalizing' | 'review' | 'saved' | 'error'
 
@@ -105,6 +107,7 @@ export function Studio() {
   const [quality, setQuality] = useState<RecordingQuality>(DEFAULT_RECORDING_QUALITY)
   const [blur, setBlur] = useState(true)
   const [blurStrength, setBlurStrength] = useState<BlurStrength>(DEFAULT_BLUR_STRENGTH)
+  const [imageAdjustments, setImageAdjustments] = useState<ImageAdjustments>(() => ({ ...DEFAULT_IMAGE_ADJUSTMENTS }))
   const [outputFolder, setOutputFolder] = useState('')
   const [countdownSeconds, setCountdownSeconds] = useState(DEFAULT_COUNTDOWN_SECONDS)
   const [mirrorVideo, setMirrorVideo] = useState(DEFAULT_MIRROR_VIDEO)
@@ -216,7 +219,7 @@ export function Studio() {
     else if (['recording', 'starting'].includes(stageRef.current)) return stop()
     else if (stageRef.current === 'ready') transition('idle')
   }, [cancelCountdown, stop, transition])
-  const camera = useCamera({ inputVideo, canvas, cameraId, micId, quality, blur, blurStrength, mirrorVideo, onSelectedIds, onQualityChange: setQuality, onDisconnect })
+  const camera = useCamera({ inputVideo, canvas, cameraId, micId, quality, blur, blurStrength, mirrorVideo, imageAdjustments, onSelectedIds, onQualityChange: setQuality, onDisconnect })
   const hasMp4 = useMemo(() => chooseMp4Type(camera.activeQuality ?? DEFAULT_RECORDING_QUALITY) !== null, [camera.activeQuality])
   const locked = !loaded || camera.connecting || !['idle', 'ready'].includes(stage) || discarding
 
@@ -237,6 +240,7 @@ export function Studio() {
       setQuality(preferences.quality)
       setBlur(preferences.blur)
       setBlurStrength(preferences.blurStrength)
+      setImageAdjustments({ brightness: preferences.brightness, contrast: preferences.contrast, saturation: preferences.saturation })
       setOutputFolder(preferences.outputFolder)
       setCountdownSeconds(preferences.countdownSeconds)
       setMirrorVideo(preferences.mirrorVideo)
@@ -262,6 +266,7 @@ export function Studio() {
       quality,
       blur,
       blurStrength,
+      ...imageAdjustments,
       countdownSeconds,
       mirrorVideo,
       autoStartPrompter,
@@ -276,7 +281,7 @@ export function Studio() {
       if (current) setPreferenceError(`Preferences could not be saved. ${message(failure)}`)
     })
     return () => { current = false }
-  }, [loaded, cameraId, micId, quality, blur, blurStrength, countdownSeconds, mirrorVideo, autoStartPrompter, script, fontSize, scrollSpeed, overlayOpacity, overlayBounds])
+  }, [loaded, cameraId, micId, quality, blur, blurStrength, imageAdjustments, countdownSeconds, mirrorVideo, autoStartPrompter, script, fontSize, scrollSpeed, overlayOpacity, overlayBounds])
   useEffect(() => window.emcorder.onRequestStop(() => { void stop() }), [stop])
   useEffect(() => {
     if (stage !== 'recording') return
@@ -746,6 +751,7 @@ export function Studio() {
           </fieldset>}
           <p className={`quiet ${!camera.connected || camera.blurStatus === 'Camera blur is ready.' || camera.blurStatus === 'Camera blur is off.' ? 'sr-only' : ''}`} role="status">{camera.blurStatus}</p>
         </section>
+        <ImagePanel adjustments={imageAdjustments} disabled={locked || !!take} onChange={setImageAdjustments} />
         <TeleprompterPanel
           script={script}
           overlayVisible={showOverlay && !take}
