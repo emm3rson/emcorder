@@ -199,11 +199,32 @@ async function assertMirroredSides(selector, mirrored = true) {
 }
 
 try {
-  await launch()
-  // Exercise the bundled model and worker, not just the unblurred failure path.
-  await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((element) =>
-    element.textContent === 'Camera blur is ready.' || element.textContent?.startsWith('Camera blur is running slowly;')
-  ), null, { timeout: 30_000 })
+  await launch(false)
+  // Check the real compositor upload path as well as the bundled model.
+  await page.evaluate(() => {
+    const prototype = WebGL2RenderingContext.prototype
+    const probe = { original: prototype.texSubImage2D, context: null }
+    window.__smokeBlurTextureProbe = probe
+    prototype.texSubImage2D = function (...args) {
+      const result = probe.original.apply(this, args)
+      probe.context = this
+      return result
+    }
+  })
+  try {
+    await connect()
+    await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((element) =>
+      element.textContent === 'Camera blur is ready.' || element.textContent?.startsWith('Camera blur is running slowly;')
+    ), null, { timeout: 30_000 })
+    await page.waitForFunction(() => window.__smokeBlurTextureProbe.context !== null)
+    assert.equal(await page.evaluate(() => window.__smokeBlurTextureProbe.context.getError()), 0,
+      'The real compositor must accept immutable texture storage and content updates without WebGL errors')
+  } finally {
+    await page.evaluate(() => {
+      WebGL2RenderingContext.prototype.texSubImage2D = window.__smokeBlurTextureProbe.original
+      delete window.__smokeBlurTextureProbe
+    })
+  }
 
   let settingsButton, settingsDialog, countdownSetting, mirrorSetting, autoStartSetting, folderButton
   function bindSettings() {
@@ -676,7 +697,10 @@ try {
   await page.waitForTimeout(1_200)
   assert.equal(await scrollOffset(), 0, 'Disabling automatic start must hold the prompter when recording begins')
   await page.getByRole('button', { name: 'Play scroll', exact: true }).click()
-  await page.waitForTimeout(300)
+  await page.waitForFunction(() => {
+    const content = document.querySelector('.prompter-content')
+    return content && Math.abs(new DOMMatrixReadOnly(getComputedStyle(content).transform).m42) > 0
+  }, null, { timeout: 5_000 })
   assert(await scrollOffset() > 0, 'Manual scrolling must still work with automatic start disabled')
   await settingsButton.click()
   for (const control of [countdownSetting, mirrorSetting, autoStartSetting, folderButton]) assert(await control.isDisabled(), 'Capture settings must lock during recording')

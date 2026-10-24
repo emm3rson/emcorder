@@ -2,9 +2,11 @@ import { BLUR_STRENGTHS, type BlurStrength } from '../../../shared/blurStrength'
 
 export interface WebGLBlurCompositor {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas
-  render(source: CanvasImageSource, mask: CanvasImageSource, strength: BlurStrength): boolean
+  render(source: CanvasImageSource, mask: CanvasImageSource, strength: BlurStrength, maskRevision: number): boolean
   dispose(): void
 }
+
+export const SEGMENTATION_MASK_SIZE = 256
 
 const VERTEX_SHADER_SOURCE = `#version 300 es
 precision highp float;
@@ -193,18 +195,21 @@ function createProgram(
   return program
 }
 
-function createTexture(gl: WebGL2RenderingContext, width?: number, height?: number): WebGLTexture | null {
+function createTexture(gl: WebGL2RenderingContext, width: number, height: number, levels = 1): WebGLTexture | null {
   const texture = gl.createTexture()
   if (!texture) return null
-  gl.bindTexture(gl.TEXTURE_2D, texture)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-  if (width !== undefined && height !== undefined) {
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+  try {
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, width, height)
+    return texture
+  } catch {
+    gl.deleteTexture(texture)
+    return null
   }
-  return texture
 }
 
 function createFramebuffer(
@@ -260,7 +265,9 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
     !gl ||
     typeof gl.createShader !== 'function' ||
     typeof gl.createFramebuffer !== 'function' ||
-    typeof gl.createVertexArray !== 'function'
+    typeof gl.createVertexArray !== 'function' ||
+    typeof gl.texStorage2D !== 'function' ||
+    typeof gl.texSubImage2D !== 'function'
   ) {
     return null
   }
@@ -277,8 +284,9 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
   gl.deleteShader(vertexShader)
 
   const vao = gl.createVertexArray()
-  const sourceTex = createTexture(gl)
-  const maskTex = createTexture(gl)
+  const sourceLevels = 1 + Math.floor(Math.log2(Math.max(width, height)))
+  const sourceTex = createTexture(gl, width, height, sourceLevels)
+  const maskTex = createTexture(gl, SEGMENTATION_MASK_SIZE, SEGMENTATION_MASK_SIZE)
   const fboTexA = createTexture(gl, blurWidth, blurHeight)
   const fboTexB = createTexture(gl, blurWidth, blurHeight)
   const fboA = fboTexA ? createFramebuffer(gl, fboTexA) : null
@@ -334,10 +342,12 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
   gl.uniform1i(gl.getUniformLocation(pass3Program, 'u_source'), 0)
   gl.uniform1i(gl.getUniformLocation(pass3Program, 'u_mask'), 1)
   gl.uniform1i(gl.getUniformLocation(pass3Program, 'u_blurred'), 2)
-  gl.uniform2f(gl.getUniformLocation(pass3Program, 'u_maskTexelSize'), 1.0 / 256.0, 1.0 / 256.0)
+  gl.uniform2f(gl.getUniformLocation(pass3Program, 'u_maskTexelSize'), 1 / SEGMENTATION_MASK_SIZE, 1 / SEGMENTATION_MASK_SIZE)
 
   let disposed = false
   let contextLost = false
+  let uploadedMask: CanvasImageSource | undefined
+  let uploadedMaskRevision: number | undefined
 
   const handleContextLost = (event: Event) => {
     event.preventDefault()
@@ -348,7 +358,7 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
 
   return {
     canvas,
-    render(source: CanvasImageSource, mask: CanvasImageSource, strength: BlurStrength): boolean {
+    render(source: CanvasImageSource, mask: CanvasImageSource, strength: BlurStrength, maskRevision: number): boolean {
       if (disposed || contextLost || gl.isContextLost()) {
         return false
       }
@@ -359,12 +369,17 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, sourceTex)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source as TexImageSource)
+        // The processing canvas changes in place, so refresh its pixels every frame.
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source as TexImageSource)
         gl.generateMipmap(gl.TEXTURE_2D)
 
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, maskTex)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mask as TexImageSource)
+        if (mask !== uploadedMask || maskRevision !== uploadedMaskRevision) {
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, mask as TexImageSource)
+          uploadedMask = mask
+          uploadedMaskRevision = maskRevision
+        }
 
         // Pass 1: Horizontal Foreground-Excluded Gaussian Blur (source + mask -> fboA)
         gl.bindFramebuffer(gl.FRAMEBUFFER, fboA)
@@ -404,6 +419,8 @@ export function createWebGLBlurCompositor(width: number, height: number): WebGLB
     dispose(): void {
       if (disposed) return
       disposed = true
+      uploadedMask = undefined
+      uploadedMaskRevision = undefined
       canvas.removeEventListener?.('webglcontextlost', handleContextLost)
       if (!contextLost && !gl.isContextLost()) {
         cleanupResources()

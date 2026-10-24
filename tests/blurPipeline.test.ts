@@ -122,6 +122,9 @@ function installFakes(failure?: 'construct' | 'initialize') {
 function installWebGLFake() {
   let contextLost = false
   let renderPasses = 0
+  let textureUnit: unknown
+  let sourceUploads = 0
+  let maskUploads = 0
   const gl = new Proxy({
     createShader: () => ({}),
     createProgram: () => ({}),
@@ -133,6 +136,11 @@ function installWebGLFake() {
     checkFramebufferStatus: () => 'FRAMEBUFFER_COMPLETE',
     isContextLost: () => contextLost,
     drawArrays: () => { renderPasses++ },
+    activeTexture: (unit: unknown) => { textureUnit = unit },
+    texSubImage2D: () => {
+      if (textureUnit === 'TEXTURE0') sourceUploads++
+      if (textureUnit === 'TEXTURE1') maskUploads++
+    },
   }, {
     get(target, key) {
       if (key in target) return Reflect.get(target, key)
@@ -150,8 +158,48 @@ function installWebGLFake() {
     surfaceType: FakeOffscreenCanvas,
     loseContext: () => { contextLost = true },
     get renderPasses() { return renderPasses },
+    get sourceUploads() { return sourceUploads },
+    get maskUploads() { return maskUploads },
   }
 }
+
+test('uploads a mask again only after a fresh worker result updates its reused canvas', async () => {
+  const fakes = installFakes()
+  const webgl = installWebGLFake()
+  const pipeline = await createPipeline(fakes.video, fakes.canvas)
+  const render = [...fakes.intervals.values()][0].callback
+  fakes.worker.ready()
+  const first = await fakes.sample()
+  fakes.mask(first)
+  render()
+  render()
+  assert.equal(webgl.sourceUploads, 2, 'each render must refresh the mutable source canvas')
+  assert.equal(webgl.maskUploads, 1, 'unchanged contents should keep the existing GPU mask')
+  pipeline.setBlurStrength('strong')
+  render()
+  assert.equal(webgl.maskUploads, 1, 'changing strength must not upload the same mask again')
+  const second = await fakes.sample()
+  fakes.mask(second)
+  render()
+  assert.equal(webgl.maskUploads, 2, 'fresh pixels in the same canvas need a new GPU upload')
+  fakes.mask(first)
+  render()
+  assert.equal(webgl.maskUploads, 2, 'an obsolete response must not invalidate the cached mask')
+  pipeline.setBlur(false)
+  render()
+  pipeline.setBlur(true)
+  render()
+  assert.equal(webgl.maskUploads, 2, 'a blur toggle must wait for new valid mask contents')
+  fakes.mask(await fakes.sample())
+  render()
+  assert.equal(webgl.maskUploads, 3)
+  const late = await fakes.sample()
+  fakes.advance(801)
+  fakes.mask(late)
+  render()
+  assert.equal(webgl.maskUploads, 3, 'stale results must never replace the GPU mask')
+  pipeline.dispose()
+})
 
 for (const renderer of ['canvas2d', 'webgl'] as const) {
   for (const quality of ['720p', '1080p'] as const) {

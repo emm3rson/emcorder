@@ -1,15 +1,15 @@
 import { DEFAULT_RECORDING_QUALITY, RECORDING_PROFILES, type RecordingQuality } from '../../../shared/recordingQuality'
 import { BLUR_STRENGTHS, DEFAULT_BLUR_STRENGTH, type BlurStrength } from '../../../shared/blurStrength'
 import type { WorkerRequest, WorkerResponse } from './segmentation.protocol'
-import { createWebGLBlurCompositor } from './webglCompositor'
+import { createWebGLBlurCompositor, SEGMENTATION_MASK_SIZE } from './webglCompositor'
 
 export interface BlurPipelineOptions {
   mirrorVideo?: boolean
   onStatus?: (message: string) => void
 }
 
-const SEGMENT_WIDTH = 256
-const SEGMENT_HEIGHT = 256
+const SEGMENT_WIDTH = SEGMENTATION_MASK_SIZE
+const SEGMENT_HEIGHT = SEGMENTATION_MASK_SIZE
 const FRAME_INTERVAL_MS = 1000 / 30
 const SEGMENT_INTERVAL_MS = 40
 const SLOW_SEGMENT_THRESHOLD_MS = 100
@@ -86,6 +86,7 @@ export async function createPipeline(
   let maskReady = false
   let segmentationFailed = false
   let lastMaskAt = 0
+  let maskRevision = 0
   let nextFrameId = 0
   let invalidBeforeFrameId = 0
   let activeFrame: { frameId: number; timestampMs: number } | null = null
@@ -155,6 +156,7 @@ export async function createPipeline(
         if (validEpoch && fresh) {
           maskContext.clearRect(0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT)
           maskContext.drawImage(data.bitmap, 0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT)
+          maskRevision = data.frameId
           maskReady = true
           lastMaskAt = sampledAt
         } else if (validEpoch) {
@@ -214,7 +216,7 @@ export async function createPipeline(
       maskReady = false
       reportStatus('Camera blur is delayed. Showing the camera without blur until a fresh mask arrives.')
     }
-    if (blurEnabled && maskFresh && webglCompositor?.render(sourceCanvas, maskCanvas, blurStrength)) {
+    if (blurEnabled && maskFresh && webglCompositor?.render(sourceCanvas, maskCanvas, blurStrength, maskRevision)) {
       output.filter = 'none'
       output.drawImage(webglCompositor.canvas, 0, 0)
     } else {
