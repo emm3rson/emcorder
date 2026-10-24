@@ -86,6 +86,14 @@ export async function createPipeline(
   let maskReady = false
   let segmentationFailed = false
   let lastMaskAt = 0
+  let nextFrameId = 0
+  let invalidBeforeFrameId = 0
+  let activeFrame: { frameId: number; timestampMs: number } | null = null
+  let resetHistory = true
+  let smoothedRoundtripMs = 0
+  let hasCompletedSegmentation = false
+  let lastVideoTime = Number.NaN
+  let lastSampleAt = Number.NEGATIVE_INFINITY
   let segmentIntervalMs = SEGMENT_INTERVAL_MS
   let segmentTimer = 0
   let inflightTimeout = 0
@@ -115,7 +123,7 @@ export async function createPipeline(
     maskReady = false
     window.clearTimeout(inflightTimeout)
     window.clearTimeout(initTimeout)
-    window.clearInterval(segmentTimer)
+    window.clearTimeout(segmentTimer)
     worker?.terminate()
     reportStatus(`Camera blur unavailable: ${message} Showing the camera without blur.`)
   }
@@ -130,38 +138,47 @@ export async function createPipeline(
       workerReady = true
       window.clearTimeout(initTimeout)
       reportStatus(maskReady ? 'Camera blur is ready.' : 'Camera blur is preparing…')
+      scheduleSegment(0)
     } else if (data.type === 'mask') {
+      if (!activeFrame || data.frameId !== activeFrame.frameId) {
+        close(data.bitmap)
+        return
+      }
+      const sampledAt = activeFrame.timestampMs
+      hasCompletedSegmentation = true
+      activeFrame = null
       segmentationPending = false
       window.clearTimeout(inflightTimeout)
-      const segmentationMs = data.segmentationMs
-      if (!disposed) {
-        try {
+      const validEpoch = blurEnabled && data.frameId >= invalidBeforeFrameId
+      const fresh = performance.now() - sampledAt <= MASK_STALE_MS
+      try {
+        if (validEpoch && fresh) {
           maskContext.clearRect(0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT)
           maskContext.drawImage(data.bitmap, 0, 0, SEGMENT_WIDTH, SEGMENT_HEIGHT)
-        } catch (error) {
-          failSegmentation(error instanceof Error ? error.message : 'could not draw the person mask.')
-          return
-        } finally {
-          close(data.bitmap)
+          maskReady = true
+          lastMaskAt = sampledAt
+        } else if (validEpoch) {
+          maskReady = false
+          reportStatus('Camera blur is delayed. Showing the camera without blur until a fresh mask arrives.')
         }
-        maskReady = true
-        lastMaskAt = Date.now()
-        const targetIntervalMs = segmentationMs > SEGMENT_INTERVAL_MS
-          ? Math.min(500, Math.ceil(segmentationMs * 1.25))
-          : SEGMENT_INTERVAL_MS
-        if (segmentationMs > SLOW_SEGMENT_THRESHOLD_MS) {
-          reportStatus('Camera blur is running slowly; reduce other camera effects for smoother video.')
-        } else {
-          reportStatus('Camera blur is ready.')
-        }
-        if (segmentIntervalMs !== targetIntervalMs) {
-          segmentIntervalMs = targetIntervalMs
-          window.clearInterval(segmentTimer)
-          segmentTimer = window.setInterval(segmentFrame, segmentIntervalMs)
-        }
-      } else {
+      } catch (error) {
+        failSegmentation(error instanceof Error ? error.message : 'could not draw the person mask.')
+      } finally {
         close(data.bitmap)
       }
+      const roundtripMs = Math.max(0, performance.now() - sampledAt)
+      smoothedRoundtripMs = smoothedRoundtripMs === 0 ? roundtripMs : smoothedRoundtripMs * 0.75 + roundtripMs * 0.25
+      const targetIntervalMs = Math.min(500, Math.max(SEGMENT_INTERVAL_MS, smoothedRoundtripMs * 1.1))
+      // Ignore small timing noise instead of changing cadence on every result.
+      if (Math.abs(targetIntervalMs - segmentIntervalMs) >= Math.max(8, segmentIntervalMs * 0.15)) {
+        segmentIntervalMs = targetIntervalMs
+      }
+      if (validEpoch && maskReady) {
+        reportStatus(roundtripMs > SLOW_SEGMENT_THRESHOLD_MS
+          ? 'Camera blur is running slowly; reduce other camera effects for smoother video.'
+          : 'Camera blur is ready.')
+      }
+      scheduleSegment(Math.max(0, segmentIntervalMs - roundtripMs))
     } else if (data.type === 'error') {
       failSegmentation(data.message)
     }
@@ -192,7 +209,11 @@ export async function createPipeline(
   const frameTimer = window.setInterval(() => {
     if (disposed || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return
     coverDraw(sourceContext, video, video.videoWidth, video.videoHeight, outputWidth, outputHeight)
-    const maskFresh = maskReady && Date.now() - lastMaskAt <= MASK_STALE_MS
+    const maskFresh = maskReady && performance.now() - lastMaskAt <= MASK_STALE_MS
+    if (blurEnabled && maskReady && !maskFresh) {
+      maskReady = false
+      reportStatus('Camera blur is delayed. Showing the camera without blur until a fresh mask arrives.')
+    }
     if (blurEnabled && maskFresh && webglCompositor?.render(sourceCanvas, maskCanvas, blurStrength)) {
       output.filter = 'none'
       output.drawImage(webglCompositor.canvas, 0, 0)
@@ -214,32 +235,71 @@ export async function createPipeline(
     }
   }, FRAME_INTERVAL_MS)
 
+  function scheduleSegment(delay: number) {
+    window.clearTimeout(segmentTimer)
+    if (disposed || segmentationFailed || !blurEnabled || !workerReady || segmentationPending) return
+    segmentTimer = window.setTimeout(segmentFrame, delay)
+  }
+
   function segmentFrame() {
-    if (disposed || segmentationFailed || !blurEnabled || !workerReady || segmentationPending || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) return
+    if (disposed || segmentationFailed || !blurEnabled || !workerReady || segmentationPending) return
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) {
+      scheduleSegment(SEGMENT_INTERVAL_MS)
+      return
+    }
+    // Avoid resampling the same decoded frame, but retry within 200 ms if a
+    // device/browser stops updating currentTime while frames remain available.
+    const now = performance.now()
+    if (Number.isFinite(video.currentTime) && video.currentTime === lastVideoTime && now - lastSampleAt < 200) {
+      scheduleSegment(SEGMENT_INTERVAL_MS)
+      return
+    }
+    lastVideoTime = video.currentTime
+    lastSampleAt = now
+    // Capture the sampling time before drawing and asynchronous bitmap preparation.
+    const frame = { frameId: ++nextFrameId, timestampMs: performance.now() }
+    activeFrame = frame
     segmentationPending = true
     window.clearTimeout(inflightTimeout)
-    inflightTimeout = window.setTimeout(() => failSegmentation('segmentation stopped responding.'), SEGMENT_TIMEOUT_MS)
-    coverDraw(segmentationCtx, video, video.videoWidth, video.videoHeight, SEGMENT_WIDTH, SEGMENT_HEIGHT, outputWidth, outputHeight)
-    createImageBitmap(segmentationCanvas).then((bitmap) => {
-      if (disposed || segmentationFailed || !worker) {
-        bitmap.close()
-        segmentationPending = false
-        window.clearTimeout(inflightTimeout)
-        return
-      }
-      const request: WorkerRequest = { type: 'segment', bitmap, timestampMs: performance.now() }
-      try {
-        worker.postMessage(request, [bitmap])
-      } catch (error) {
-        // A failed transfer still belongs to this thread.
-        bitmap.close()
-        throw error
-      }
-    }).catch((error: unknown) => {
+    // A cold GPU may compile the model on its first inference. Subsequent
+    // requests retain the shorter watchdog once the worker has completed one.
+    inflightTimeout = window.setTimeout(
+      () => failSegmentation('segmentation stopped responding.'),
+      hasCompletedSegmentation ? SEGMENT_TIMEOUT_MS : INIT_TIMEOUT_MS,
+    )
+    try {
+      coverDraw(segmentationCtx, video, video.videoWidth, video.videoHeight, SEGMENT_WIDTH, SEGMENT_HEIGHT, outputWidth, outputHeight)
+      createImageBitmap(segmentationCanvas).then((bitmap) => {
+        if (disposed || segmentationFailed || !worker) {
+          bitmap.close()
+          segmentationPending = false
+          window.clearTimeout(inflightTimeout)
+          return
+        }
+        if (!blurEnabled || frame.frameId < invalidBeforeFrameId) {
+          bitmap.close()
+          activeFrame = null
+          segmentationPending = false
+          window.clearTimeout(inflightTimeout)
+          scheduleSegment(0)
+          return
+        }
+        const request: WorkerRequest = { type: 'segment', bitmap, ...frame, resetHistory }
+        try {
+          worker.postMessage(request, [bitmap])
+          resetHistory = false
+        } catch (error) {
+          // A failed transfer still belongs to this thread.
+          bitmap.close()
+          throw error
+        }
+      }).catch((error: unknown) => {
+        failSegmentation(error instanceof Error ? error.message : 'could not prepare a camera frame.')
+      })
+    } catch (error) {
       failSegmentation(error instanceof Error ? error.message : 'could not prepare a camera frame.')
-    })
+    }
   }
-  if (!segmentationFailed) segmentTimer = window.setInterval(segmentFrame, segmentIntervalMs)
 
   return {
     setMirrorVideo(enabled) {
@@ -251,13 +311,22 @@ export async function createPipeline(
     setBlur(enabled) {
       if (disposed || blurEnabled === enabled) return
       blurEnabled = enabled
-      publishStatus()
+      maskReady = false
+      invalidBeforeFrameId = nextFrameId + 1
+      resetHistory = true
+      window.clearTimeout(segmentTimer)
+      if (enabled && !segmentationFailed) {
+        reportStatus(workerReady ? 'Camera blur is preparing…' : 'Loading camera blur…')
+        scheduleSegment(0)
+      } else {
+        publishStatus()
+      }
     },
     dispose() {
       if (disposed) return
       disposed = true
       window.clearInterval(frameTimer)
-      window.clearInterval(segmentTimer)
+      window.clearTimeout(segmentTimer)
       window.clearTimeout(inflightTimeout)
       window.clearTimeout(initTimeout)
       worker?.removeEventListener('message', handleWorkerMessage)

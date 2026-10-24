@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { createPipeline } from '../src/renderer/features/blur/pipeline'
+import type { WorkerRequest } from '../src/renderer/features/blur/segmentation.protocol'
 import { computePersonConfidence, smoothConfidenceBuffer } from '../src/renderer/features/blur/segmentation.worker'
 
 const originalGlobals = new Map<string, PropertyDescriptor | undefined>()
 
 function replaceGlobal(name: string, value: unknown): void {
-  originalGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+  if (!originalGlobals.has(name)) originalGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
   Object.defineProperty(globalThis, name, { configurable: true, writable: true, value })
 }
 
@@ -19,10 +20,11 @@ afterEach(() => {
 })
 
 function installFakes(failure?: 'construct' | 'initialize') {
+  let now = 0
   let draws = 0
   let timerId = 0
   const intervals = new Map<number, { callback: () => void; delay: number }>()
-  const timeouts = new Map<number, () => void>()
+  const timeouts = new Map<number, { callback: () => void; delay: number; at: number }>()
   const statuses: string[] = []
   const drawCalls: Array<unknown[]> = []
   const drawFilters: string[] = []
@@ -49,19 +51,23 @@ function installFakes(failure?: 'construct' | 'initialize') {
   class FakeWorker extends EventTarget {
     terminated = false
     messages = 0
+    requests: WorkerRequest[] = []
     constructor() {
       super()
       if (failure === 'construct') throw new Error('worker blocked')
       worker = this
     }
-    postMessage(): void {
+    postMessage(request: WorkerRequest): void {
       if (failure === 'initialize') throw new Error('worker initialization failed')
       this.messages++
+      this.requests.push(request)
     }
     terminate(): void { this.terminated = true }
     ready(): void { this.dispatchEvent(new MessageEvent('message', { data: { type: 'ready' } })) }
   }
   replaceGlobal('document', { createElement: () => { const result = canvas(); createdCanvases.push(result); return result }, baseURI: 'file:///app/index.html' })
+  replaceGlobal('performance', { now: () => now })
+  replaceGlobal('createImageBitmap', () => Promise.resolve({ close: () => {} } as ImageBitmap))
   replaceGlobal('window', {
     setInterval: (callback: () => void, delay: number) => {
       const id = ++timerId
@@ -69,9 +75,9 @@ function installFakes(failure?: 'construct' | 'initialize') {
       return id
     },
     clearInterval: (id: number) => intervals.delete(id),
-    setTimeout: (callback: () => void) => {
+    setTimeout: (callback: () => void, delay: number) => {
       const id = ++timerId
-      timeouts.set(id, callback)
+      timeouts.set(id, { callback, delay, at: now + delay })
       return id
     },
     clearTimeout: (id: number) => timeouts.delete(id),
@@ -81,6 +87,25 @@ function installFakes(failure?: 'construct' | 'initialize') {
   const video = { readyState: 2, videoWidth: 1280, videoHeight: 720 } as HTMLVideoElement
   return {
     video,
+    advance(ms: number) { now += ms },
+    runNext() {
+      const next = [...timeouts.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+      assert.ok(next, 'expected a scheduled timeout')
+      timeouts.delete(next[0])
+      now = Math.max(now, next[1].at)
+      next[1].callback()
+    },
+    async sample() {
+      this.runNext()
+      await Promise.resolve()
+      return worker!.requests.filter((request) => request.type === 'segment').at(-1)! as Extract<WorkerRequest, { type: 'segment' }>
+    },
+    mask(request: Extract<WorkerRequest, { type: 'segment' }>, close = () => {}) {
+      worker!.dispatchEvent(new MessageEvent('message', { data: {
+        type: 'mask', bitmap: { close }, segmentationMs: 10,
+        timestampMs: request.timestampMs, frameId: request.frameId,
+      } }))
+    },
     canvas: canvas() as unknown as HTMLCanvasElement,
     statuses,
     createdCanvases,
@@ -135,9 +160,7 @@ for (const renderer of ['canvas2d', 'webgl'] as const) {
       const webgl = renderer === 'webgl' ? installWebGLFake() : null
       const pipeline = await createPipeline(fakes.video, fakes.canvas, {}, quality)
       fakes.worker.ready()
-      fakes.worker.dispatchEvent(new MessageEvent('message', { data: {
-        type: 'mask', bitmap: { close: () => {} }, segmentationMs: 10,
-      } }))
+      fakes.mask(await fakes.sample())
       const frame = Array.from(fakes.intervals.values()).find(({ delay }) => delay === 1000 / 30)!.callback
       const checkOrientation = (mirrored: boolean, expectedOutputLayers: number) => {
         fakes.drawStates.length = 0
@@ -217,7 +240,7 @@ test('closes a pending frame bitmap after the segmentation worker fails', async 
   replaceGlobal('createImageBitmap', () => new Promise<ImageBitmap>((resolve) => { completeBitmap = resolve }))
   const pipeline = await createPipeline(fakes.video, fakes.canvas)
   fakes.worker.ready()
-  Array.from(fakes.intervals.values()).find((timer) => timer.delay === 40)!.callback()
+  fakes.runNext()
   fakes.worker.dispatchEvent(new Event('messageerror'))
   let closed = false
   completeBitmap({ close: () => { closed = true } } as ImageBitmap)
@@ -231,20 +254,23 @@ test('closes a pending frame bitmap after the segmentation worker fails', async 
   assert.equal(fakes.timeouts.size, 0)
 })
 
-test('keeps blur status off through worker updates and restores its latest status when enabled', async () => {
+test('keeps blur status off through worker updates and invalidates old masks', async () => {
   const fakes = installFakes()
   const pipeline = await createPipeline(fakes.video, fakes.canvas, { onStatus: (message) => fakes.statuses.push(message) })
+  fakes.worker.ready()
+  const pending = await fakes.sample()
   pipeline.setBlur(false)
   const offStatusCount = fakes.statuses.length
-  fakes.worker.ready()
-  fakes.worker.dispatchEvent(new MessageEvent('message', { data: {
-    type: 'mask', bitmap: { close: () => {} }, segmentationMs: 150,
-  } }))
+  fakes.advance(150)
+  fakes.mask(pending)
   assert.equal(fakes.statuses.at(-1), 'Camera blur is off.')
-  assert.equal(fakes.statuses.length, offStatusCount, 'worker updates should not replace or repeat the disabled status')
+  assert.equal(fakes.statuses.length, offStatusCount)
   pipeline.setBlur(true)
-  assert.match(fakes.statuses.at(-1)!, /running slowly/)
-
+  assert.match(fakes.statuses.at(-1)!, /preparing/)
+  const next = await fakes.sample()
+  assert.equal(next.resetHistory, true)
+  fakes.mask(next)
+  assert.match(fakes.statuses.at(-1)!, /ready/)
   pipeline.setBlur(false)
   fakes.worker.dispatchEvent(new Event('messageerror'))
   assert.equal(fakes.statuses.at(-1), 'Camera blur is off.')
@@ -271,9 +297,7 @@ for (const [quality, baseRadius, maskFeather] of [['720p', 18, 1.5], ['1080p', 2
     const fakes = installFakes()
     const pipeline = await createPipeline(fakes.video, fakes.canvas, {}, quality)
     fakes.worker.ready()
-    fakes.worker.dispatchEvent(new MessageEvent('message', { data: {
-      type: 'mask', bitmap: { close: () => {} }, segmentationMs: 10,
-    } }))
+    fakes.mask(await fakes.sample())
     const frame = Array.from(fakes.intervals.values()).find(({ delay }) => delay === 1000 / 30)!.callback
     const checkRadius = (radius: number) => {
       fakes.drawFilters.length = 0
@@ -292,9 +316,10 @@ for (const [quality, baseRadius, maskFeather] of [['720p', 18, 1.5], ['1080p', 2
     frame()
     assert.ok(fakes.drawFilters.every((filter) => filter === 'none'), 'off should bypass blur regardless of strength')
     pipeline.setBlur(true)
+    fakes.mask(await fakes.sample())
     checkRadius(baseRadius * 1.5)
     assert.equal(fakes.createdCanvases.length, 4, 'changing strength should reuse the processing canvases')
-    assert.equal(fakes.intervals.size, 2, 'changing strength should keep the existing render and segmentation loops')
+    assert.equal(fakes.intervals.size, 1, 'only output rendering should use a repeating timer')
     pipeline.dispose()
   })
 }
@@ -343,9 +368,152 @@ test('segmentFrame maps the full 16:9 camera frame into the 256x256 segmentation
   const pipeline = await createPipeline(video, fakes.canvas, {}, '1080p')
   fakes.worker.ready()
   fakes.drawCalls.length = 0
-  Array.from(fakes.intervals.values()).find((timer) => timer.delay === 40)!.callback()
+  fakes.runNext()
 
   assert.equal(fakes.drawCalls.length, 1)
   assert.deepEqual(fakes.drawCalls[0].slice(1), [0, 0, 1920, 1080, 0, 0, 256, 256])
+  pipeline.dispose()
+})
+
+
+test('samples single flight and schedules from the full round trip without interval quantization', async () => {
+  const fakes = installFakes()
+  let resolveBitmap!: (bitmap: ImageBitmap) => void
+  replaceGlobal('createImageBitmap', () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve }))
+  const pipeline = await createPipeline(fakes.video, fakes.canvas)
+  fakes.worker.ready()
+  fakes.runNext()
+  fakes.advance(25)
+  resolveBitmap({ close() {} } as ImageBitmap)
+  await Promise.resolve()
+  const request = fakes.worker.requests.at(-1)! as Extract<WorkerRequest, { type: 'segment' }>
+  assert.equal(request.timestampMs, 0, 'sampling must precede bitmap preparation')
+  assert.equal(fakes.timeouts.size, 1, 'only the watchdog exists during an in-flight request')
+  assert.equal(fakes.intervals.size, 1)
+  fakes.advance(30)
+  fakes.mask(request)
+  const next = [...fakes.timeouts.values()][0]
+  assert.ok(Math.abs(next.delay - 5.5) < 0.001, '55 ms full round trip targets 60.5 ms start-to-start')
+  pipeline.dispose()
+})
+
+test('rejects late masks using sampling age and recovers only when a fresh result arrives', async () => {
+  const fakes = installFakes()
+  const pipeline = await createPipeline(fakes.video, fakes.canvas, { onStatus: (status) => fakes.statuses.push(status) })
+  fakes.worker.ready()
+  const request = await fakes.sample()
+  fakes.advance(801)
+  let closed = false
+  fakes.mask(request, () => { closed = true })
+  assert.equal(closed, true)
+  assert.match(fakes.statuses.at(-1)!, /without blur until a fresh mask/)
+  fakes.drawFilters.length = 0
+  fakes.intervals.values().next().value!.callback()
+  assert.ok(fakes.drawFilters.every((filter) => filter === 'none'))
+  fakes.mask(await fakes.sample())
+  assert.match(fakes.statuses.at(-1)!, /ready/)
+  fakes.advance(801)
+  fakes.intervals.values().next().value!.callback()
+  assert.match(fakes.statuses.at(-1)!, /without blur until a fresh mask/)
+  pipeline.dispose()
+})
+
+test('disable and re-enable during inference discards the old epoch and resets the next history', async () => {
+  const fakes = installFakes()
+  const pipeline = await createPipeline(fakes.video, fakes.canvas)
+  fakes.worker.ready()
+  const old = await fakes.sample()
+  pipeline.setBlur(false)
+  pipeline.setBlur(true)
+  assert.equal(fakes.timeouts.size, 1, 'a toggle must not overlap the pending request')
+  fakes.mask(old)
+  fakes.drawFilters.length = 0
+  fakes.intervals.values().next().value!.callback()
+  assert.ok(fakes.drawFilters.every((filter) => filter === 'none'))
+  const next = await fakes.sample()
+  assert.ok(next.frameId > old.frameId)
+  assert.equal(next.resetHistory, true)
+  fakes.mask(old)
+  assert.equal(fakes.timeouts.size, 1, 'duplicate old response must not clear the active watchdog')
+  fakes.mask(next)
+  pipeline.dispose()
+})
+
+for (const end of ['dispose', 'timeout'] as const) {
+  test('closes a pending bitmap after ' + end + ' and clears timers', async () => {
+    const fakes = installFakes()
+    let resolveBitmap!: (bitmap: ImageBitmap) => void
+    replaceGlobal('createImageBitmap', () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve }))
+    const pipeline = await createPipeline(fakes.video, fakes.canvas)
+    fakes.worker.ready()
+    fakes.runNext()
+    if (end === 'dispose') pipeline.dispose()
+    else fakes.runNext()
+    let closed = false
+    resolveBitmap({ close() { closed = true } } as ImageBitmap)
+    await Promise.resolve()
+    assert.equal(closed, true)
+    assert.equal(fakes.worker.messages, 1)
+    assert.equal(fakes.worker.terminated, true)
+    assert.equal(fakes.timeouts.size, 0)
+    pipeline.dispose()
+    assert.equal(fakes.intervals.size, 0)
+  })
+}
+
+test('does not repeatedly sample an unchanged camera timestamp but retries within a bound', async () => {
+  const fakes = installFakes()
+  Object.assign(fakes.video, { currentTime: 1 })
+  const pipeline = await createPipeline(fakes.video, fakes.canvas)
+  fakes.worker.ready()
+  fakes.mask(await fakes.sample())
+  fakes.runNext()
+  assert.equal(fakes.worker.messages, 2)
+  fakes.advance(200)
+  const next = await fakes.sample()
+  assert.equal(next.frameId, 2)
+  pipeline.dispose()
+})
+
+
+test('a toggle during bitmap preparation closes the old sample before a reset submission', async () => {
+  const fakes = installFakes()
+  let resolveBitmap!: (bitmap: ImageBitmap) => void
+  replaceGlobal('createImageBitmap', () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve }))
+  const pipeline = await createPipeline(fakes.video, fakes.canvas)
+  fakes.worker.ready()
+  fakes.runNext()
+  pipeline.setBlur(false)
+  pipeline.setBlur(true)
+  let closed = false
+  resolveBitmap({ close() { closed = true } } as ImageBitmap)
+  await Promise.resolve()
+  assert.equal(closed, true)
+  assert.equal(fakes.worker.messages, 1, 'the invalidated bitmap must never reach the worker')
+  replaceGlobal('createImageBitmap', () => Promise.resolve({ close() {} } as ImageBitmap))
+  const next = await fakes.sample()
+  assert.equal(next.resetHistory, true)
+  assert.equal(next.frameId, 2)
+  pipeline.dispose()
+})
+
+
+test('allows bounded cold inference warm-up, rejects its old mask, then uses the normal watchdog', async () => {
+  const fakes = installFakes()
+  const pipeline = await createPipeline(fakes.video, fakes.canvas, { onStatus: (status) => fakes.statuses.push(status) })
+  fakes.worker.ready()
+  const cold = await fakes.sample()
+  assert.equal([...fakes.timeouts.values()][0].delay, 20_000)
+  fakes.advance(4_000)
+  fakes.mask(cold)
+  assert.match(fakes.statuses.at(-1)!, /without blur until a fresh mask/)
+  fakes.drawFilters.length = 0
+  fakes.intervals.values().next().value!.callback()
+  assert.ok(fakes.drawFilters.every((filter) => filter === 'none'))
+  const next = await fakes.sample()
+  assert.equal([...fakes.timeouts.values()][0].delay, 1_500)
+  fakes.advance(100)
+  fakes.mask(next)
+  assert.match(fakes.statuses.at(-1)!, /ready/)
   pipeline.dispose()
 })

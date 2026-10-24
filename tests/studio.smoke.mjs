@@ -200,6 +200,10 @@ async function assertMirroredSides(selector, mirrored = true) {
 
 try {
   await launch()
+  // Exercise the bundled model and worker, not just the unblurred failure path.
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((element) =>
+    element.textContent === 'Camera blur is ready.' || element.textContent?.startsWith('Camera blur is running slowly;')
+  ), null, { timeout: 30_000 })
 
   let settingsButton, settingsDialog, countdownSetting, mirrorSetting, autoStartSetting, folderButton
   function bindSettings() {
