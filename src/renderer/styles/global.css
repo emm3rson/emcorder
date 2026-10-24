@@ -639,6 +639,7 @@ meter::-webkit-meter-optimum-value {
 }
 
 .prompter-overlay {
+  container-type: inline-size;
   position: absolute;
   z-index: 3;
   display: flex;
@@ -657,7 +658,6 @@ meter::-webkit-meter-optimum-value {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 8px;
   padding: 7px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
@@ -672,6 +672,7 @@ meter::-webkit-meter-optimum-value {
 
 .prompter-title {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   font-size: 10px;
@@ -682,13 +683,16 @@ meter::-webkit-meter-optimum-value {
 
 .prompter-toolbar {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 
 .prompter-toolbar button {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 24px;
@@ -715,7 +719,9 @@ meter::-webkit-meter-optimum-value {
 }
 
 .prompter-mini-control {
-  display: inline-flex;
+  display: none;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   font-size: 10px;
@@ -724,10 +730,18 @@ meter::-webkit-meter-optimum-value {
 }
 
 .prompter-mini-control input[type='range'] {
-  width: 52px;
+  flex: 1;
+  min-width: 52px;
+  width: 0;
   accent-color: #FFFFFF;
   margin: 0;
   cursor: pointer;
+}
+
+@container (min-width: 480px) {
+  .prompter-mini-control {
+    display: inline-flex;
+  }
 }
 
 .prompter-viewport {
