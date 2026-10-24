@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Relaxed background-blur refinement for confident clothing, accessories, and narrow foreground details, with a gentler edge cutoff while retaining ambiguous-background suppression.
 - Improved background-blur timing with completion-driven segmentation, mask expiry measured from the sampled frame, fewer MediaPipe mask copies, and time-aware smoothing that resets after pauses or reactivation.
 - Clear preference-save warnings after a successful update, and ignore superseded update results so settings show the current persistence status.
 - Removed unused capture diagnostics and status state left behind by the diagnostics UI removal, avoiding unnecessary work and studio renders during capture.

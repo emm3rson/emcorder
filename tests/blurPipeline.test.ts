@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { createPipeline } from '../src/renderer/features/blur/pipeline'
 import type { WorkerRequest } from '../src/renderer/features/blur/segmentation.protocol'
-import { computePersonConfidence, smoothConfidenceBuffer } from '../src/renderer/features/blur/segmentation.worker'
+import { computePersonConfidence, refineConfidenceBuffer, smoothConfidenceBuffer } from '../src/renderer/features/blur/segmentation.worker'
 
 const originalGlobals = new Map<string, PropertyDescriptor | undefined>()
 
@@ -359,6 +359,83 @@ test('smoothConfidenceBuffer dampens stationary edge jitter while tracking fast 
   assert.ok(Math.abs(smoothed[0] - 0.5112) < 1e-5)
   // Fast movement (diff = 0.80 >= 0.26) uses 0.90 blend -> 0.10 + 0.80 * 0.90 = 0.82
   assert.ok(Math.abs(smoothed[1] - 0.82) < 1e-5)
+})
+
+test('class confidence preserves reliable clothing and accessories without requiring same-pixel skin', () => {
+  const confidence = (classes: number[]) => computePersonConfidence(classes.map((value) => new Float32Array([value])), 0)
+  const clothing = confidence([0.2, 0, 0, 0, 0.78, 0.02])
+  const accessory = confidence([0.1, 0, 0, 0, 0, 0.9])
+  const ambiguousChair = confidence([0.48, 0, 0, 0, 0.50, 0.02])
+  const ambiguousAccessory = confidence([0.55, 0, 0, 0, 0, 0.45])
+
+  assert.ok(clothing > 0.77, 'reliable clothing should keep nearly all its class confidence')
+  assert.ok(accessory > 0.8, 'reliable accessories should survive without overlapping skin or hair')
+  assert.ok(ambiguousChair < 0.32, 'uncertain clothing-like chair edges should remain below the foreground transition')
+  assert.ok(ambiguousAccessory < 0.32, 'background-dominant accessory predictions should retain their penalty')
+  for (const classes of [[0.4, 0.6, 0, 0, 0, 0], [0.4, 0, 0.6, 0, 0, 0], [0.2, 0, 0, 0, 0.8, 0]]) {
+    const value = confidence(classes)
+    assert.ok(value >= 0.59, 'ambiguous skin/hair and reliable clothing must retain foreground evidence')
+    assert.ok(value <= 1 - classes[0] + 1e-6, 'class weighting must never exceed the non-background confidence')
+  }
+})
+
+test('spatial refinement keeps thin foreground features while attenuating weak isolated speckles', () => {
+  const source = new Float32Array(25)
+  for (let y = 0; y < 5; y++) source[y * 5 + 2] = 0.9
+  const refined = new Float32Array(source.length)
+  refineConfidenceBuffer(source, 5, 5, refined)
+  for (let y = 0; y < 5; y++) {
+    assert.ok(refined[y * 5 + 2] > 0.65, 'a narrow supported feature should retain most of its confidence, including at image borders')
+    assert.ok(refined[y * 5 + 1] < 0.15, 'smoothing must not spread strong confidence into adjacent background')
+  }
+
+  const speckle = new Float32Array(25)
+  speckle[12] = 0.3
+  refineConfidenceBuffer(speckle, 5, 5, refined)
+  assert.ok(refined[12] > 0 && refined[12] < speckle[12], 'weak isolated noise is attenuated, without claiming all speckles are removed')
+  assert.ok(refined.every((value) => value < 0.32), 'weak noise must stay below the foreground transition')
+  assert.equal(source[12], Math.fround(0.9), 'the input history must not be modified')
+})
+
+test('reliable class relaxation changes continuously with accessory and background confidence', () => {
+  const confidence = (bg: number, others: number) => computePersonConfidence(
+    [bg, 0, 0, 0, 1 - bg - others, others].map((value) => new Float32Array([value])), 0,
+  )
+  const delta = 0.0001
+  // Probe the old proposed gates and both ends of the gradual reliability ramps.
+  for (const accessory of [0.5, 0.65, 0.8]) {
+    assert.ok(Math.abs(confidence(0.1, accessory - delta) - confidence(0.1, accessory + delta)) < 0.001,
+      'small accessory-confidence changes must not introduce a sudden foreground jump')
+  }
+  for (const bg of [0.1, 0.2, 0.3]) {
+    const accessoryConfidence = (background: number) => computePersonConfidence(
+      [background, 0, 0, 0, 0, 1 - background].map((value) => new Float32Array([value])), 0,
+    )
+    assert.ok(Math.abs(accessoryConfidence(bg - delta) - accessoryConfidence(bg + delta)) < 0.001,
+      'small background-confidence changes must not abruptly switch accessory reliability')
+  }
+  const clothingConfidence = (bg: number) => computePersonConfidence(
+    [bg, 0, 0, 0, 1 - bg, 0].map((value) => new Float32Array([value])), 0,
+  )
+  assert.ok(Math.abs(clothingConfidence(0.2 - delta) - clothingConfidence(0.2 + delta)) < 0.001,
+    'the new clothing relaxation must meet its full-strength end continuously')
+  assert.ok(clothingConfidence(0.25) > 0.75 * 0.94 && clothingConfidence(0.25) < 0.75,
+    'intermediate background confidence should receive a partial clothing relaxation')
+})
+
+test('spatial refinement preserves flat fields and softens boundaries without overshoot', () => {
+  for (const [width, height] of [[1, 1], [1, 3], [3, 1], [3, 3]]) {
+    const source = new Float32Array(width * height).fill(0.8)
+    const refined = new Float32Array(source.length)
+    refineConfidenceBuffer(source, width, height, refined)
+    assert.deepEqual(refined, source, 'clamped borders and single-pixel dimensions must preserve a uniform mask')
+  }
+  const source = new Float32Array([0.1, 0.1, 0.8, 0.8])
+  const refined = new Float32Array(source.length)
+  refineConfidenceBuffer(source, 4, 1, refined)
+  assert.ok(refined[1] > source[1] && refined[1] < 0.32, 'the background side gets a small transition')
+  assert.ok(refined[2] < source[2] && refined[2] > 0.7, 'the foreground side stays strongly supported')
+  assert.ok(refined.every((value) => value >= source[0] && value <= source[3]), 'refinement must not overshoot the input range')
 })
 
 test('segmentFrame maps the full 16:9 camera frame into the 256x256 segmentation canvas without center-square cropping', async () => {

@@ -20,7 +20,9 @@ test('segmentation worker smooths by elapsed time and respects borrowed callback
   let width = 1
   let height = 2
   let confidence = 0.5
+  let maskValues: Float32Array | undefined
   let alpha = 0
+  let alphas: number[] = []
   const outputs: Array<{ closeCount: number; close(): void }> = []
   const timestamps: number[] = []
   Object.assign(worker, {
@@ -39,6 +41,7 @@ test('segmentation worker smooths by elapsed time and respects borrowed callback
         assert.ok(insideCallback)
         clock += 7
         alpha = image.data[3]
+        alphas = Array.from(image.data).filter((_value, index) => index % 4 === 3)
       } }
     }
     transferToImageBitmap() {
@@ -67,7 +70,7 @@ test('segmentation worker smooths by elapsed time and respects borrowed callback
           confidenceMasks: [{ width, height, getAsFloat32Array() {
             assert.ok(insideCallback)
             if (failRead) throw new Error('mask read failed')
-            return new Float32Array(width * height).fill(confidence)
+            return maskValues ?? new Float32Array(width * height).fill(confidence)
           } }],
           close() { resultClosed++ },
         })
@@ -130,6 +133,16 @@ test('segmentation worker smooths by elapsed time and respects borrowed callback
     segment(1040)
     assert.ok(timestamps.at(-1)! > timestamps.at(-2)!, 'MediaPipe timestamps strictly increase')
     assert.equal((responses.at(-1) as Extract<WorkerResponse, { type: 'mask' }>).timestampMs, 1040)
+    width = 5
+    height = 5
+    maskValues = new Float32Array(width * height)
+    for (let y = 0; y < height; y++) maskValues[y * width + 2] = 0.9
+    segment(1060, true)
+    for (let y = 0; y < height; y++) {
+      assert.ok(alphas[y * width + 2] > 165, 'the worker must preserve narrow foreground through spatial refinement and quantization')
+      assert.ok(alphas[y * width + 1] < 40, 'neighboring background must stay low after refinement')
+    }
+    maskValues = undefined
     failTransfer = true
     segment(1080)
     assert.equal(outputs.at(-1)?.closeCount, 1, 'failed postMessage leaves the output owned by the worker')

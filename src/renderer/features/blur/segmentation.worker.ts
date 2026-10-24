@@ -25,8 +25,14 @@ export function computePersonConfidence(masks: Float32Array[], index: number): n
     const others = masks[5][index] ?? 0
 
     const humanCore = hair * 1.12 + body * 1.05 + face * 1.08
-    const accessoryScore = humanCore >= 0.05 ? others * 1.06 : others * 0.65
-    const clothesScore = bg > 0.30 && humanCore < 0.06 ? clothes * 0.60 : clothes * 0.94
+    // Clothing and accessories can occupy pixels without any skin or hair.
+    // Relax their penalty only when background confidence is already low.
+    const accessoryReliability =
+      Math.max(0, Math.min(1, (others - 0.50) / 0.30)) *
+      Math.max(0, Math.min(1, (0.30 - bg) / 0.20))
+    const accessoryScore = humanCore >= 0.05 ? others * 1.06 : others * (0.65 + 0.29 * accessoryReliability)
+    const clothesReliability = Math.max(0, Math.min(1, (0.30 - bg) / 0.10))
+    const clothesScore = bg > 0.30 && humanCore < 0.06 ? clothes * 0.60 : clothes * (0.94 + 0.06 * clothesReliability)
     const foregroundSum = humanCore + accessoryScore + clothesScore
     const nonBg = 1 - bg
     const raw = Math.min(nonBg, foregroundSum)
@@ -38,6 +44,37 @@ export function computePersonConfidence(masks: Float32Array[], index: number): n
   }
 
   return 0
+}
+
+export function refineConfidenceBuffer(
+  source: Float32Array,
+  width: number,
+  height: number,
+  target: Float32Array,
+): void {
+  // Keep half the center confidence so the Gaussian softens staircase edges
+  // without averaging away narrow fingers, hair, or clothing boundaries.
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * width
+    const y0 = Math.max(0, y - 1) * width
+    const y2 = Math.min(height - 1, y + 1) * width
+    for (let x = 0; x < width; x++) {
+      const x0 = Math.max(0, x - 1)
+      const x2 = Math.min(width - 1, x + 1)
+      const center = source[rowOffset + x]
+      const gaussian =
+        (source[y0 + x0] +
+          source[y0 + x] * 2 +
+          source[y0 + x2] +
+          source[rowOffset + x0] * 2 +
+          center * 4 +
+          source[rowOffset + x2] * 2 +
+          source[y2 + x0] +
+          source[y2 + x] * 2 +
+          source[y2 + x2]) * 0.0625
+      target[rowOffset + x] = center * 0.5 + gaussian * 0.5
+    }
+  }
 }
 
 export function smoothConfidenceBuffer(
@@ -222,28 +259,7 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') 
           maskImageData = new ImageData(new Uint8ClampedArray(pixelCount * 4), maskWidth, maskHeight)
         }
 
-        // 3x3 Gaussian spatial smoothing in Float32 before quantization removes 256x256
-        // diagonal staircase waves so upscaled head and shoulder curves remain smooth.
-        for (let y = 0; y < maskHeight; y++) {
-          const rowOffset = y * maskWidth
-          const y0 = Math.max(0, y - 1) * maskWidth
-          const y2 = Math.min(maskHeight - 1, y + 1) * maskWidth
-          for (let x = 0; x < maskWidth; x++) {
-            const x0 = Math.max(0, x - 1)
-            const x2 = Math.min(maskWidth - 1, x + 1)
-            scratchConfidences[rowOffset + x] =
-              (smoothed[y0 + x0] +
-                smoothed[y0 + x] * 2 +
-                smoothed[y0 + x2] +
-                smoothed[rowOffset + x0] * 2 +
-                smoothed[rowOffset + x] * 4 +
-                smoothed[rowOffset + x2] * 2 +
-                smoothed[y2 + x0] +
-                smoothed[y2 + x] * 2 +
-                smoothed[y2 + x2]) *
-              0.0625
-          }
-        }
+        refineConfidenceBuffer(smoothed, maskWidth, maskHeight, scratchConfidences)
 
         const pixels = maskImageData.data
         for (let index = 0; index < pixelCount; index++) {

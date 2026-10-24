@@ -147,7 +147,9 @@ void main() {
     refinedMask = bilateralMask / max(totalW, 0.0001);
   }
 
-  float alpha = smoothstep(0.36, 0.74, refinedMask);
+  // Retain more of moderately confident hair, hands, and clothing edges while
+  // keeping low-confidence background predictions below the transition.
+  float alpha = smoothstep(0.32, 0.70, refinedMask);
   vec3 finalColor = mix(blurred, sharp, alpha);
   outColor = vec4(finalColor, 1.0);
 }
