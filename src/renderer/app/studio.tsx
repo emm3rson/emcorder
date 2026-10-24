@@ -21,6 +21,7 @@ import {
 import { TeleprompterOverlay } from '../features/teleprompter/TeleprompterOverlay'
 import { TeleprompterPanel } from '../features/teleprompter/TeleprompterPanel'
 import { ImagePanel } from '../features/image/ImagePanel'
+import { StudioAdvisories } from '../features/notices/StudioAdvisories'
 
 type Stage = 'idle' | 'ready' | 'countdown' | 'starting' | 'recording' | 'finalizing' | 'review' | 'saved' | 'error'
 
@@ -125,6 +126,7 @@ export function Studio() {
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [micSilenceWarning, setMicSilenceWarning] = useState(false)
+  const [advisoryScope, setAdvisoryScope] = useState(0)
   const [limitReached, setLimitReached] = useState(false)
   const [take, setTake] = useState<RecordedTake | null>(null)
   const [reviewPlaying, setReviewPlaying] = useState(false)
@@ -320,6 +322,7 @@ export function Studio() {
 
   const startCountdown = useCallback(() => {
     if (stageRef.current !== 'ready' || !camera.connected || !hasMp4 || camera.connecting) return
+    setAdvisoryScope((value) => value + 1)
     setError(''); setElapsed(0); setCountdown(countdownSeconds); setScrollOffset(0); setPrompterPlaying(false); transition('countdown')
     const deadline = performance.now() + countdownSeconds * 1000
     countdownTimer.current = setInterval(() => {
@@ -447,6 +450,7 @@ export function Studio() {
 
   async function connect(selection?: Partial<CameraSelection>) {
     if (locked || take) return
+    setAdvisoryScope((value) => value + 1)
     setError('')
     if (await camera.connect(selection)) transition('ready')
     else transition('idle')
@@ -677,7 +681,6 @@ export function Studio() {
           {stage === 'error' && <p className="studio-status" role="status">{status}</p>}
         </div>
         {stage === 'recording' && elapsed >= 840 && <div className="notice warning" role="alert">One minute remaining. Recording stops automatically at 15 minutes.</div>}
-        {limitReached && take && <div className="notice" role="status">The 15-minute limit was reached. Your take has been finalized.</div>}
         {(error || camera.error) && <div role="alert" className="notice error"><p>{error || camera.error}</p>{stage === 'error' && <button onClick={() => setDiscardOpen(true)}>Discard take</button>}{!take && stage === 'idle' && <button disabled={camera.connecting} onClick={() => void connect()}>Reconnect</button>}</div>}
         {preferenceError && <p role="alert" className="quiet">{preferenceError}</p>}
         {!hasMp4 && <div role="alert" className="notice error">MP4 recording is unavailable in this runtime. Restart EmCorder with its bundled Electron runtime.</div>}
@@ -717,7 +720,6 @@ export function Studio() {
               <option value="1080p" disabled={!camera.supports1080p || !has1080Mp4}>1080p (1920 × 1080, 30 FPS)</option>
             </select>
           </label>
-          {camera.qualityNotice && <p className="quiet" role="status">{camera.qualityNotice}</p>}
           <label>
             <span className="field-label">Microphone</span>
             <select aria-label="Microphone" value={micId} disabled={locked || !!take} onChange={(event) => changeDevices({ micId: event.target.value })}>
@@ -730,12 +732,11 @@ export function Studio() {
             <span className="field-label">Input level</span>
             <meter aria-label="Microphone input level" min="0" max="1" value={camera.level} />
           </div>
-          {stage === 'recording' && camera.connected && camera.silent && micSilenceWarning && <p className="mic-warning" role="status">Microphone input is quiet. Check your microphone if you’re speaking.</p>}
         </section>
         <section className="card blur-card">
           <div className="card-heading">
             <h2>Background blur</h2>
-            <input aria-label="Background blur" className="toggle" type="checkbox" checked={blur} disabled={locked || !!take} onChange={(event) => setBlur(event.target.checked)} />
+            <input aria-label="Background blur" className="toggle" type="checkbox" checked={blur} disabled={locked || !!take} onChange={(event) => { setBlur(event.target.checked); setAdvisoryScope((value) => value + 1) }} />
           </div>
           {blur && <fieldset className="blur-strength" disabled={locked || !!take}>
             <legend className="sr-only">Blur strength</legend>
@@ -749,7 +750,6 @@ export function Studio() {
               </label>
             ))}
           </fieldset>}
-          <p className={`quiet ${!camera.connected || camera.blurStatus === 'Camera blur is ready.' || camera.blurStatus === 'Camera blur is off.' ? 'sr-only' : ''}`} role="status">{camera.blurStatus}</p>
         </section>
         <ImagePanel adjustments={imageAdjustments} disabled={locked || !!take} onChange={setImageAdjustments} />
         <TeleprompterPanel
@@ -773,6 +773,12 @@ export function Studio() {
       </aside>
     </div>
     <video ref={inputVideo} className="source-video" muted playsInline aria-hidden="true" />
+    <StudioAdvisories key={advisoryScope}
+      blurStatus={camera.connected && blur && !take ? camera.blurStatus : ''}
+      microphoneQuiet={stage === 'recording' && camera.connected && camera.silent && micSilenceWarning}
+      qualityNotice={camera.connected && !take ? camera.qualityNotice : ''}
+      limitReached={limitReached && !!take}
+      modalOpen={settingsOpen || saveOpen || discardOpen} />
     {settingsOpen && <SettingsDialog countdownSeconds={countdownSeconds} mirrorVideo={mirrorVideo} autoStartPrompter={autoStartPrompter} outputFolder={outputFolder} captureLocked={locked} folderLocked={!loaded || camera.connecting || ['countdown', 'starting', 'recording', 'finalizing'].includes(stage) || discarding} preferenceError={preferenceError} onCountdownChange={setCountdownSeconds} onMirrorChange={setMirrorVideo} onAutoStartPrompterChange={setAutoStartPrompter} onFolderChange={setOutputFolder} onClose={() => setSettingsOpen(false)} />}
     {saveOpen && <SaveDialog folder={outputFolder} initialFilename={filename} bytes={take?.bytes} elapsedSeconds={take?.elapsedSeconds} quality={take?.quality ?? DEFAULT_RECORDING_QUALITY} onFolderChange={setOutputFolder} onSave={save} onCancel={() => setSaveOpen(false)} />}
     {discardOpen && <DiscardDialog failed={stage === 'error'} onDiscard={retake} onCancel={() => setDiscardOpen(false)} />}

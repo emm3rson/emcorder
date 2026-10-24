@@ -1002,15 +1002,42 @@ textarea:hover {
   color: var(--muted);
 }
 
-.mic-warning {
-  font-size: 12px;
-  line-height: 1.45;
-  color: #7A4C2A;
-  background: #FAF3EB;
-  border: 1px solid #E6D2B8;
-  border-radius: 10px;
-  padding: 7px 10px;
-  margin-top: 10px !important;
+.advisory-toast {
+  position: fixed;
+  z-index: 10;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+}
+
+.advisory-toast[hidden] {
+  display: none;
+}
+
+.advisory-toast p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.toast-dismiss {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
 }
 
 .countdown {

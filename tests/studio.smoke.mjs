@@ -200,6 +200,59 @@ async function assertMirroredSides(selector, mirrored = true) {
 
 try {
   await launch(false)
+  // Exercise real advisory delivery without depending on host segmentation speed.
+  await page.evaluate(() => {
+    window.__smokeNativeWorker = window.Worker
+    window.Worker = class { constructor() { throw new Error('Synthetic blur failure') } }
+  })
+  await connect()
+  const blurCard = page.locator('.blur-card')
+  const beforeNotice = await blurCard.boundingBox()
+  const toast = page.locator('.advisory-toast')
+  await toast.waitFor({ state: 'visible' })
+  assert.match(await toast.innerText(), /camera is showing without blur/)
+  assert.deepEqual(await blurCard.boundingBox(), beforeNotice, 'Advisories must not resize or move the blur card')
+  assert.equal(await blurCard.getByRole('status').count(), 0, 'Blur status must not appear inside the card')
+  assert.equal(await toast.evaluate((element) => getComputedStyle(element).position), 'fixed')
+  assert.equal(await toast.evaluate((element) => document.querySelector('.preview-frame')?.contains(element) ?? false), false,
+    'Toast must be separate from the camera preview and recording canvas')
+  const dismissNotice = page.getByRole('button', { name: 'Dismiss notification' })
+  await toast.hover()
+  await page.waitForTimeout(6200)
+  assert(await toast.isVisible(), 'Hover must pause the toast timeout')
+  await dismissNotice.focus()
+  await page.mouse.move(0, 0)
+  await page.waitForTimeout(6200)
+  assert(await toast.isVisible(), 'Keyboard focus must pause the toast timeout')
+  await dismissNotice.click()
+  await toast.waitFor({ state: 'detached' })
+  await page.waitForTimeout(2300)
+  assert.equal(await toast.count(), 0, 'A dismissed ongoing issue must not repeat')
+  await page.getByLabel('Background blur', { exact: true }).uncheck()
+  await page.getByLabel('Background blur', { exact: true }).check()
+  await toast.waitFor({ state: 'visible' })
+  assert(await page.getByLabel('Background blur', { exact: true }).evaluate((element) => document.activeElement === element),
+    'A toast must not take keyboard focus')
+  await page.mouse.move(0, 0)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await toast.waitFor({ state: 'hidden' })
+  await page.waitForTimeout(6200)
+  await page.keyboard.press('Escape')
+  await toast.waitFor({ state: 'visible' })
+  await toast.waitFor({ state: 'detached', timeout: 9000 })
+  await page.getByRole('button', { name: 'Record', exact: true }).click()
+  await toast.waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor()
+  await dismissNotice.click()
+  await page.waitForTimeout(2300)
+  assert.equal(await toast.count(), 0, 'An ongoing issue must not repeat during the same take')
+  await page.getByRole('button', { name: 'Stop', exact: true }).click()
+  await waitForReview()
+  await retakeUnsaved()
+  await page.evaluate(() => {
+    window.Worker = window.__smokeNativeWorker
+    delete window.__smokeNativeWorker
+  })
   // Check the real compositor upload path as well as the bundled model.
   await page.evaluate(() => {
     const prototype = WebGL2RenderingContext.prototype
@@ -212,11 +265,8 @@ try {
     }
   })
   try {
-    await connect()
-    await page.waitForFunction(() => [...document.querySelectorAll('[role="status"]')].some((element) =>
-      element.textContent === 'Camera blur is ready.' || element.textContent?.startsWith('Camera blur is running slowly;')
-    ), null, { timeout: 30_000 })
-    await page.waitForFunction(() => window.__smokeBlurTextureProbe.context !== null)
+    await page.getByRole('button', { name: 'Restart camera and microphone', exact: true }).click()
+    await page.waitForFunction(() => window.__smokeBlurTextureProbe.context !== null, null, { timeout: 30_000 })
     assert.equal(await page.evaluate(() => window.__smokeBlurTextureProbe.context.getError()), 0,
       'The real compositor must accept immutable texture storage and content updates without WebGL errors')
   } finally {
@@ -422,7 +472,7 @@ try {
       data.fill(window.__smokeMicQuiet ? 128 : 144)
     }
   })
-  const micWarning = page.locator('.mic-warning')
+  const micWarning = page.locator('.advisory-toast').filter({ hasText: 'Microphone input is quiet.' })
   await page.waitForTimeout(4_000)
   assert.equal(await micWarning.count(), 0, 'Preparation silence must not show a warning')
   await page.getByRole('button', { name: 'Record', exact: true }).click()
@@ -436,8 +486,8 @@ try {
   await page.evaluate(() => { window.__smokeMicQuiet = false })
   await micWarning.waitFor({ state: 'hidden' })
   await page.evaluate(() => { window.__smokeMicQuiet = true })
-  await page.waitForTimeout(4_000)
-  assert.equal(await micWarning.count(), 0, 'A normal pause must receive a fresh grace period')
+  await page.waitForTimeout(9_000)
+  assert.equal(await micWarning.count(), 0, 'A repeated quiet period must not notify again during the same take')
   await page.getByRole('button', { name: 'Stop', exact: true }).click()
   await waitForReview()
   assert.equal(await micWarning.count(), 0, 'Review must not show a microphone warning')

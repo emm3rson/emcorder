@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Moved blur, microphone-quiet, quality-fallback, and automatic-stop advisories into dismissible toasts that keep cards stable, suppress repeated warnings per take or retry, and pause while hovered, focused, or behind dialogs. Actionable errors remain visible in context.
 - Added remembered brightness, contrast, and saturation controls with a consistent 50–150% range in a collapsible Image card, with Reset and matching preview/MP4 output across background-blur modes.
 - Replaced the header wordmark image with the primary logo symbol in its original colors beside bold EmCorder text with a Slate-to-Soft-Silver gradient.
 - Expanded the overlay sliders to use the available prompter width and hid them below 480px, keeping play and restart available alongside the sidebar controls.
