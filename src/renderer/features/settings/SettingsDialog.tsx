@@ -83,6 +83,7 @@ export function SettingsDialog({
       <div className="save-dialog-header">
         <h2 id={`${id}-title`}>Settings</h2>
       </div>
+      <p className="quiet">EmCorder {__APP_VERSION__}</p>
 
       <div className="settings-group">
         <label className="settings-row" htmlFor={`${id}-countdown`}>

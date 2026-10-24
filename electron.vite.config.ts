@@ -1,10 +1,12 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { version } from './package.json'
 
 export default defineConfig(({ command }) => ({
   main: {},
   preload: {},
   renderer: {
+    define: { __APP_VERSION__: JSON.stringify(version) },
     plugins: [react(), {
       name: 'development-react-csp',
       transformIndexHtml: {

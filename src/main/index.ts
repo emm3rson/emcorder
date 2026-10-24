@@ -6,6 +6,8 @@ import { Readable } from 'node:stream'
 import { TakeStore } from './take-store'
 import { PreferencesStore } from './preferences'
 
+if (process.platform === 'win32') app.setAppUserModelId('local.emcorder.app')
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'recording', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
 ])
@@ -91,9 +93,22 @@ async function createStudio(): Promise<void> {
 }
 
 const testUserData = process.env.EMCORDER_TEST_USER_DATA
+// Keep the same data directory in development and installed builds, regardless
+// of the display name embedded by the packager.
+app.setPath('userData', join(app.getPath('appData'), 'emcorder'))
 if (!app.isPackaged && testUserData && isAbsolute(testUserData)) app.setPath('userData', testUserData)
 
+const hasInstanceLock = app.requestSingleInstanceLock()
+if (!hasInstanceLock) app.quit()
+else app.on('second-instance', () => {
+  if (!studio) return
+  if (studio.isMinimized()) studio.restore()
+  studio.show()
+  studio.focus()
+})
+
 app.whenReady().then(async () => {
+  if (!hasInstanceLock) return
   store = new TakeStore(join(app.getPath('userData'), 'takes'))
   preferences = new PreferencesStore(app.getPath('userData'), app.getPath('videos'))
   await preferences.load()

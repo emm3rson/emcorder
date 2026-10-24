@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-10-24
+
+- Use a visible installer wizard with a Finish page and launch option, create desktop and Start menu shortcuts, repair shortcut metadata on reinstall, and set the runtime Windows app identity.
+
+## 0.1.0 - 2026-10-24
+
+- Added a Windows x64 installer for the current user, manual upgrades, and Start menu integration while retaining local data on uninstall.
+- Show the package version in Settings and bring the existing window forward when EmCorder is launched again.
+- Added release and versioning guidance for local builds and future distribution.
 - Moved blur, microphone-quiet, quality-fallback, and automatic-stop advisories into dismissible toasts that keep cards stable, suppress repeated warnings per take or retry, and pause while hovered, focused, or behind dialogs. Actionable errors remain visible in context.
 - Added remembered brightness, contrast, and saturation controls with a consistent 50–150% range in a collapsible Image card, with Reset and matching preview/MP4 output across background-blur modes.
 - Replaced the header wordmark image with the primary logo symbol in its original colors beside bold EmCorder text with a Slate-to-Soft-Silver gradient.

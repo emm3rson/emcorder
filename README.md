@@ -16,14 +16,20 @@ npm run dev
 ```powershell
 npm run typecheck    # Check TypeScript
 npm test             # Run unit and QA tests
+npm run test:desktop # Build and test version display and single-instance behavior
 npm run build        # Typecheck and compile the app
 npm run preview      # Run the compiled app
 npm run test:studio  # Build and test the studio with a synthetic camera
 npm run test:spike   # Build and run synthetic 1-minute and 5-minute recordings
 npm run package      # Build a runnable Windows folder in release/win-unpacked
+npm run dist         # Build the Windows x64 installer in release/
 ```
 
-To run the packaged app, open `EmCorder.exe` in `release/win-unpacked` and keep the folder intact. The app is unsigned, so Windows may show a security warning. This repository provides source only. There are no downloadable releases.
+To install a local build, run `npm run dist`, then open `release/EmCorder-Setup-<version>-x64.exe`. The wizard installs for the current Windows user, creates desktop and Start menu shortcuts, and offers to launch EmCorder on Finish. It also appears in Windows Settings under installed apps. The app is unsigned, so Windows may show a security warning.
+
+To update, save your take, close EmCorder, and run the newer installer. Preferences, scripts, and temporary takes remain in `%APPDATA%/emcorder`; uninstall also retains that data. Saved videos stay in their chosen folders. There are no automatic update checks. This repository currently provides source and local build instructions, with no hosted installer downloads.
+
+For a runnable folder instead, use `npm run package`, open `EmCorder.exe` in `release/win-unpacked`, and keep the folder intact. See [releasing and versioning](docs/RELEASING.md) for the release workflow.
 
 ## Using the studio
 
@@ -34,6 +40,8 @@ To run the packaged app, open `EmCorder.exe` in `release/win-unpacked` and keep 
 5. Stop to review the MP4, then **Save** (choose a filename and folder) or **Retake**.
 
 The header gear opens **Settings**: countdown (3–10 seconds), mirroring, automatic prompter scrolling, default save folder, and keyboard shortcuts. Changes persist across launches. Mirroring applies to the preview, review, and saved MP4. Capture settings lock during a take and during review.
+
+Settings also shows the app version. Launching EmCorder again brings the existing window forward.
 
 `Space` plays or pauses teleprompter scrolling, or playback during review. `R` restarts the script. Shortcuts work only inside the app and are ignored while typing or in a dialog.
 
@@ -62,4 +70,5 @@ Bug reports and contributions are welcome through GitHub issues and pull request
 The code is licensed under the [MIT license](LICENSE). Bundled third-party assets retain their own licenses; see the [third-party notices](docs/third-party-notices.md).
 
 - [Changelog](CHANGELOG.md)
+- [Releasing and versioning](docs/RELEASING.md)
 - [Branding assets](src/renderer/public/branding/README.md)

@@ -7,6 +7,16 @@ files:
   - package.json
 asar: true
 win:
-  target: portable
+  target: nsis
   icon: src/renderer/public/branding/app-icon.ico
   signExecutable: false
+nsis:
+  artifactName: EmCorder-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  createStartMenuShortcut: true
+  createDesktopShortcut: always
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  include: build/installer.nsh
