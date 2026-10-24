@@ -501,7 +501,8 @@ export function Studio() {
   return <main className="studio">
     <header className="topbar">
       <h1 className="studio-brand">
-        <img src="./branding/logo-primary.svg" alt="EmCorder" width="1600" height="400" />
+        <img src="./branding/logo-primary-mark.svg" alt="" width="32" height="32" />
+        <span>EmCorder</span>
       </h1>
       <button type="button" className="settings-button" aria-label="Settings" title="Settings" aria-haspopup="dialog" disabled={!loaded || saveOpen || discardOpen || discarding} onClick={() => setSettingsOpen(true)}>
         <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

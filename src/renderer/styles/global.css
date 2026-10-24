@@ -149,16 +149,27 @@ h1 {
 }
 
 .studio-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  font-size: 22px;
+  font-weight: 700;
   line-height: 1;
-  /* Offset the SVG's transparent inset to align the artwork with the studio gutter. */
-  margin-left: -16px;
 }
 
 .studio-brand img {
   display: block;
-  width: 160px;
-  height: 40px;
-  filter: brightness(0.75);
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.studio-brand span {
+  background: linear-gradient(to right, #70868F, #B3C2C9);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
 }
 
 .sr-only {

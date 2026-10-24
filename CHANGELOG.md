@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replaced the header wordmark image with the primary logo symbol in its original colors beside bold EmCorder text with a Slate-to-Soft-Silver gradient.
 - Expanded the overlay sliders to use the available prompter width and hid them below 480px, keeping play and restart available alongside the sidebar controls.
 - Reused fixed GPU texture storage for background blur and skipped unchanged mask uploads while retaining per-frame source updates and the existing blur mipmaps.
 - Relaxed background-blur refinement for confident clothing, accessories, and narrow foreground details, with a gentler edge cutoff while retaining ambiguous-background suppression.
