@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve already queued recording chunks when MP4 encoding stops with an error, retaining more of the temporary take for recovery.
+- Reject an incomplete save if the temporary take ends before all finalized bytes are copied, keeping the source take and removing the partial destination.
+
 ## 0.1.1 - 2026-10-24
 
 - Use a visible installer wizard with a Finish page and launch option, create desktop and Start menu shortcuts, repair shortcut metadata on reinstall, and set the runtime Windows app identity.

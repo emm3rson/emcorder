@@ -48,6 +48,7 @@ export class Mp4Recorder {
   private writerOpened = false;
   private settled = false;
   private failure: Error | null = null;
+  private writeFailed = false;
   private writes: Promise<void> = Promise.resolve();
   private queuedChunks = 0;
   private startTask: Promise<void> | null = null;
@@ -177,8 +178,11 @@ export class Mp4Recorder {
     // Chain appends to preserve recorder event order and bound retained Blob data.
     this.writes = this.writes.then(async () => {
       const data = await event.data.arrayBuffer();
-      if (!this.failure) await window.emcorder.appendChunk(data);
+      // An encoder error or backlog can stop capture while earlier chunks are still
+      // queued. Preserve those chunks in the temp take unless the writer itself failed.
+      if (!this.writeFailed) await window.emcorder.appendChunk(data);
     }).catch((error: unknown) => {
+      this.writeFailed = true;
       this.fail(error, "Could not write a recording chunk.");
       this.requestStopAfterFailure();
     }).finally(() => {

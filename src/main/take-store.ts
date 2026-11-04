@@ -100,7 +100,7 @@ export class TakeStore {
     try {
       // Finalization may still be syncing, or may have failed after closing the
       // handle. Never promote an incomplete take to a successful saved recording.
-      await this.finish()
+      const expectedBytes = await this.finish()
       let destinationIsDirectory = false
       try { destinationIsDirectory = (await stat(directory)).isDirectory() } catch {}
       if (!destinationIsDirectory) throw new Error('Choose an existing folder to save the recording.')
@@ -138,6 +138,7 @@ export class TakeStore {
           }
           position += bytesRead
         }
+        if (position !== expectedBytes) throw new Error('The temporary recording changed while it was being saved. The take was kept; try saving again.')
         await target.sync()
       } finally {
         try { if (input) await input.close() } finally { if (target) await target.close() }

@@ -123,6 +123,22 @@ test("automatically closes the writer on append failure and reports no successfu
   assert.match(errors[0], /disk write failed/);
 });
 
+test("drains queued chunks to the temporary take after an encoder error", async () => {
+  const { recorder, calls, errors, stopped } = installFakes();
+  await recorder.start();
+  activeRecorder!.emitChunk("first");
+  activeRecorder!.emitChunk("second");
+  const error = new Event("error");
+  Object.defineProperty(error, "error", { value: new Error("encoder failed") });
+  activeRecorder!.dispatchEvent(error);
+
+  await assert.rejects(recorder.stop(), /encoder failed/);
+  assert.deepEqual(calls.append, ["first", "second"]);
+  assert.equal(calls.finish, 1);
+  assert.equal(stopped.length, 0);
+  assert.match(errors[0], /encoder failed/);
+});
+
 test("closes an opened writer when MediaRecorder.start fails", async () => {
   const { recorder, calls, stopped } = installFakes();
   FakeMediaRecorder.startThrows = true;

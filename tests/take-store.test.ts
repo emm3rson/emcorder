@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, open, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -109,6 +109,21 @@ test("successful save removes temporary data and serves review from the saved fi
   await store.discard();
   assert.equal(store.path, null);
   assert.equal(await readFile(destination, "utf8"), "complete take");
+});
+
+test("save preserves the temporary take if the source ends before the finalized size", async () => {
+  const { root, store } = await createStore();
+  await store.begin();
+  await store.append(new TextEncoder().encode("complete take"));
+  const source = store.path!;
+  await store.finish();
+  await truncate(source, 2);
+
+  await assert.rejects(store.save({ filename: "partial", directory: root }), /temporary recording changed/);
+  assert.equal(await readFile(source, "utf8"), "co");
+  assert.equal(store.path, source);
+  await assert.rejects(stat(join(root, "partial.mp4")), { code: "ENOENT" });
+  await store.discard();
 });
 
 test("save skips existing suffixes without overwriting any recording", async () => {
